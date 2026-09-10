@@ -32,6 +32,7 @@ import {
 	RECOMMENDED_EFFORT_SUFFIX,
 } from "./messages.js";
 import { isExecutorBlocked } from "./policy.js";
+import type { AdvisorSessionPool } from "./session-pool.js";
 import { getAdvisorEffort, getAdvisorModel, setAdvisorEffort, setAdvisorModel } from "./state.js";
 
 // Mirror: packages/rpiv-pi/extensions/rpiv-core/rpiv-models/items.ts
@@ -75,13 +76,23 @@ function buildEffortItems(picked: Model<Api>): SelectItem[] {
 // can't strand "model=undefined + tool still registered". The strip
 // is unconditional-on-presence (no advisor at all), so it stays inline rather
 // than routing through reconcileAdvisorTool's blocked-conditional path.
-function applyDisable(pi: ExtensionAPI, ctx: ExtensionContext): void {
+/**
+ * Disable path. The pool is optional: the `/advisor` command and the tool
+ * registration always supply one, while embedders and unit tests that drive the
+ * command in isolation may not — in that case there is no pooled session to
+ * invalidate, so the disposal step is simply skipped.
+ */
+function applyDisable(pi: ExtensionAPI, ctx: ExtensionContext, pool: AdvisorSessionPool | undefined): void {
 	if (!saveAdvisorConfig(undefined, undefined)) {
 		ctx.ui.notify(MSG_PERSIST_FAILED, "error");
 		return;
 	}
 	setAdvisorModel(undefined);
 	setAdvisorEffort(undefined);
+	// Disabling the advisor invalidates its sessions: a later re-enable should
+	// start a fresh advisor conversation rather than resume a half-finished
+	// review under a possibly different reviewer model.
+	pool?.disposeAll();
 	const active = pi.getActiveTools();
 	if (active.includes(ADVISOR_TOOL_NAME)) {
 		pi.setActiveTools(active.filter((n) => n !== ADVISOR_TOOL_NAME));
@@ -114,7 +125,7 @@ function applyEnable(
 	);
 }
 
-export function registerAdvisorCommand(pi: ExtensionAPI): void {
+export function registerAdvisorCommand(pi: ExtensionAPI, pool?: AdvisorSessionPool): void {
 	pi.registerCommand("advisor", {
 		description: "Configure the advisor model for the advisor-strategy pattern",
 		handler: async (_args, ctx) => {
@@ -131,7 +142,7 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
 			if (!choice) return;
 
 			if (choice === NO_ADVISOR_VALUE) {
-				applyDisable(pi, ctx);
+				applyDisable(pi, ctx, pool);
 				return;
 			}
 

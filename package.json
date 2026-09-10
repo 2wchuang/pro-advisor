@@ -1,16 +1,29 @@
 {
   "name": "@2wchuang/pro-advisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension. A second opinion from a stronger reviewer model, kept in one persistent session per executor session.",
-  "keywords": ["pi-package", "pi-extension", "advisor"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "advisor"
+  ],
   "type": "module",
   "license": "MIT",
   "author": "2wchuang",
-  "contributors": ["juicesharp (original @juicesharp/rpiv-advisor)"],
-  "repository": { "type": "git", "url": "git+https://github.com/2wchuang/pro-advisor.git" },
+  "contributors": [
+    "juicesharp (original @juicesharp/rpiv-advisor)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2wchuang/pro-advisor.git"
+  },
   "homepage": "https://github.com/2wchuang/pro-advisor#readme",
-  "bugs": { "url": "https://github.com/2wchuang/pro-advisor/issues" },
-  "publishConfig": { "access": "public" },
+  "bugs": {
+    "url": "https://github.com/2wchuang/pro-advisor/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "index.ts",
     "advisor/",
@@ -25,7 +38,11 @@
     "LICENSE",
     "!**/*.test.ts"
   ],
-  "pi": { "extensions": ["./index.ts"] },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

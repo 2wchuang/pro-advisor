@@ -9,7 +9,6 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": false,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
@@ -18,5 +17,6 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "docs"]
 }

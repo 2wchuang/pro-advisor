@@ -29,6 +29,8 @@ beforeEach(async () => {
 	advisor.setAdvisorEffort(undefined);
 	advisor.setDisabledForModels([]);
 	advisor.__resetAdvisorAnnounced();
+	const fixtures = await import("../test-utils/index.js");
+	fixtures.__resetFixtureIds();
 
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("rpiv-advisor")];
 

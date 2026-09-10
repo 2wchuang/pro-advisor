@@ -16,6 +16,7 @@ import {
 	msgAdvisorRestoredInactive,
 } from "./messages.js";
 import { isExecutorBlocked, setDisabledForModels } from "./policy.js";
+import type { AdvisorSessionPool } from "./session-pool.js";
 import { setAdvisorEffort, setAdvisorModel } from "./state.js";
 
 /**
@@ -111,8 +112,24 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
 	notifyOnce(msgAdvisorRestored(modelKey(model), effort), "info");
 }
 
-export function registerAdvisorSessionStart(pi: ExtensionAPI): void {
-	pi.on("session_start", async (_event, ctx) => {
+export function registerAdvisorSessionStart(pi: ExtensionAPI, pool: AdvisorSessionPool): void {
+	let activeExecutorSessionId: string | undefined;
+
+	pi.on("session_start", async (event, ctx) => {
+		// /new, /fork and /resume all supersede the previous executor session. Its
+		// advisor session is keyed by the OLD executor session id, so leaving it
+		// pooled would pin a streaming session and a session file for the rest of
+		// the process. /resume is included because the successor session id is the
+		// resumed one — the pre-resume id is never revisited.
+		if (event.reason !== "startup" && event.reason !== "reload" && activeExecutorSessionId) {
+			pool.disposeEntry(activeExecutorSessionId);
+		}
+		activeExecutorSessionId = ctx.sessionManager.getSessionId();
 		restoreAdvisorState(ctx, pi);
+	});
+
+	pi.on("session_shutdown", async () => {
+		pool.disposeAll();
+		activeExecutorSessionId = undefined;
 	});
 }

@@ -130,8 +130,9 @@ export function createMockUI(overrides: Partial<ExtensionUIContext> = {}): MockU
 export function createMockSessionManager(branch: SessionEntry[] = [], sessionId = "test-session") {
 	return {
 		getBranch: vi.fn(() => branch),
+		getEntry: vi.fn((id: string) => branch.find((entry) => entry.id === id) ?? undefined),
 		getEntries: vi.fn(() => branch),
-		getLeafId: vi.fn(() => (branch.length ? branch[branch.length - 1].id : null)),
+		getLeafId: vi.fn(() => branch[branch.length - 1]?.id ?? null),
 		getSessionFile: vi.fn(() => "/tmp/test-session.jsonl"),
 		getSessionId: vi.fn(() => sessionId),
 	};
@@ -175,7 +176,7 @@ export function createMockCtx(opts: MockCtxOptions = {}): ExtensionContext {
 // Message + session-entry fixtures — kept signature-identical to upstream.
 // ---------------------------------------------------------------------------
 
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 
 export function makeUserMessage(text: string): UserMessage {
 	return {
@@ -219,12 +220,39 @@ export function makeToolResult(input: ToolResultInput): ToolResultMessage {
 	} as unknown as ToolResultMessage;
 }
 
-export function makeMessageEntry(message: Message): SessionEntry {
-	return { type: "message", message } as unknown as SessionEntry;
+let entryIdCounter = 0;
+
+/** Reset the session-entry id counter. Called from test/setup.ts between tests. */
+export function __resetFixtureIds(): void {
+	entryIdCounter = 0;
 }
 
+/**
+ * Wrap a message as a session entry. Real entries always carry id/parentId, and
+ * the mirror's watermark tracking is keyed on `id`, so the fixture must supply
+ * one or incremental delivery cannot be exercised at all.
+ */
+export function makeMessageEntry(message: Message, parentId: string | null = null): SessionEntry {
+	entryIdCounter += 1;
+	return {
+		type: "message",
+		id: `entry-${entryIdCounter}`,
+		parentId,
+		timestamp: new Date().toISOString(),
+		message,
+	} as unknown as SessionEntry;
+}
+
+/** Build a linear branch of message entries with proper parent links. */
 export function buildSessionEntries(messages: Message[]): SessionEntry[] {
-	return messages.map(makeMessageEntry);
+	const out: SessionEntry[] = [];
+	let parentId: string | null = null;
+	for (const message of messages) {
+		const entry = makeMessageEntry(message, parentId);
+		out.push(entry);
+		parentId = entry.id;
+	}
+	return out;
 }
 
 export function buildLlmMessages(messages: Message[]): Message[] {

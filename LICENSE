@@ -1,5 +1,16 @@
 MIT License
 
+Copyright (c) 2026 2wchuang
+
+This package is a derivative work of @juicesharp/rpiv-advisor
+(https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-advisor),
+Copyright (c) 2026 juicesharp, also under the MIT License. Portions of this
+package — including advisor/config.ts, advisor/messages.ts, advisor/policy.ts,
+advisor/state.ts, advisor/inventory.ts, advisor/command.ts, advisor/handlers.ts,
+advisor/restore.ts, advisor/register.ts, advisor-ui.ts, and fuzzy.ts — are
+retained from that original work, with the advisor session layer replaced.
+The original copyright notice is preserved below.
+
 Copyright (c) 2026 juicesharp
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

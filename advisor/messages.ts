@@ -31,6 +31,18 @@ export const CHECKMARK = " ✓";
 export const MSG_ADVISOR_DISABLED = "Advisor disabled";
 export const MSG_REQUIRES_INTERACTIVE = "/advisor requires interactive mode";
 export const MSG_ADVISOR_NUDGE = "Please advise on the executor's situation above.";
+/**
+ * Delimits the mirrored executor transcript inside the advisor session, so the
+ * advisor can tell executor activity apart from its own prior replies.
+ */
+export const EXECUTOR_MIRROR_MARKER = "EXECUTOR TRANSCRIPT";
+/**
+ * Sent as the single bounded retry when the advisor returns no text. A short
+ * corrective turn in the SAME advisor session is what makes the retry useful —
+ * resending an identical payload would just reproduce the empty reply.
+ */
+export const MSG_EMPTY_RETRY = "Your previous reply contained no guidance. Reply with your concrete guidance now — a plan, a correction, or a stop signal.";
+export const ERR_SESSION_CREATE = (msg: string) => `Advisor session could not be created: ${msg}`;
 export const MSG_EFFORT_NOT_SET = "Effort not set — advisor uses the model default";
 export const MSG_PERSIST_FAILED = "Failed to save advisor selection — selection not persisted";
 
