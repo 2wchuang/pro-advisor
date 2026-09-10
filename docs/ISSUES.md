@@ -90,6 +90,31 @@
 
 ---
 
+## I-7 自动 compaction 反转了 advisor 的身份
+
+**状态：已修** — `advisor/session-pool.ts` 在构造 driver 时调用 `setAutoCompactionEnabled(false)`；回归测试 + `repo-guards.test.ts` GUARD 8 锁定。
+
+**证据（实测，非推断）**：在一个长到越过 Pi 压缩阈值的会话上（`tokensBefore: 510091`），advisor 不再给建议，转而**向执行器请示**：
+
+> I need your guidance on where we stand. Here's the situation: 1. We successfully published @2wchuang/pro-advisor@0.2.2 ...
+
+并把**执行器的**发布里程碑列成**自己的**成就。
+
+**成因**：advisor 会话是真正的 Pi `AgentSession`，所以 Pi 的自动 compaction 也作用于它。而压缩摘要的模板是为**执行器**写的 —— 它要求产出 `## Goal`、`## Constraints & Preferences`、`## Progress`、`## Next Steps`。advisor 的 transcript 是**执行器工作的镜像**，于是压缩把执行器的任务总结成了 advisor 自己的任务，advisor 就接受了这个身份。
+
+**这是 fork 引入的新缺陷，上游不可能发生** —— 无状态侧调用没有会话可压缩。这也是本次开发中第一个「有状态设计反而更差」的缺陷。
+
+**代价**：禁用压缩意味着超长 advisor 会话会持续增长。这是本 fork 已在 README 中声明并标注为"不是 token 节省"的取舍 —— 比静默的身份反转可接受。
+
+**同时实测确认的两件事**：
+
+- `deliveredIds` 移除在生产中生效：新 mirror-state 条目 **27 字节**，对比 0.2.1 写的 **10,077 / 10,173 字节**（同一会话）。
+- 向后兼容成立：0.2.2 读取含旧 `deliveredIds` 数组的 0.2.1 会话文件，忽略该字段并继续增量投递。
+
+**记录但不修**：两次 provider 失败（配额限制下的 `WebSocket error`）各在 advisor 会话里留下 4 条空 assistant 消息（`usage input=0 out=0`）。水位线不变量在两次失败中都正确保持（未推进），下一次成功调用也未受这些空消息影响。**没有证据表明它们造成危害**，因此不做修改 —— 避免为未证实的风险引入复杂度。
+
+---
+
 ## 上游未改动的相关缺陷（记录备查，非本 fork 引入）
 
 - `inventory.ts` 的 globalThis 单槽缓存按**工具名集合**失效，不按会话区分。多会话共用一个进程时，工具清单文本共享——这是有意的（进程级注册表），但意味着工具描述变化会反映到所有会话。
