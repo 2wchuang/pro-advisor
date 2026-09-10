@@ -21,8 +21,9 @@ const ADVISOR_DESCRIPTION =
 	"guidance, then resume. Takes NO parameters — when you call advisor(), " +
 	"your conversation history is automatically forwarded. The advisor keeps " +
 	"ONE persistent session per executor session, so a follow-up call continues " +
-	"the same advisor conversation and only sends what changed since your last " +
-	"consultation.";
+	"the same advisor conversation and only has to hand over what changed in " +
+	"yours. This is not a token saving: the advisor's own history is re-sent to " +
+	"its provider each turn like any other chat session.";
 
 export const DEFAULT_PROMPT_SNIPPET =
 	"Escalate to a stronger reviewer model when you are stuck, when an approach is not converging, or before an irreversible decision";

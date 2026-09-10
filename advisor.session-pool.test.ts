@@ -207,15 +207,43 @@ describe("mirror bookkeeping — persists into and survives the session file", (
 		seedPersistedTurn(sessionFile, agentDir);
 
 		const first = await createAdvisorDriver(options);
-		first.saveMirrorState({ watermarkId: "entry-7", deliveredIds: ["entry-6", "entry-7"] });
+		first.saveMirrorState({ watermarkId: "entry-7" });
 		first.dispose();
 
 		const reopened = await createAdvisorDriver(options);
 		try {
-			expect(reopened.loadMirrorState()).toMatchObject({
-				watermarkId: "entry-7",
-				deliveredIds: ["entry-6", "entry-7"],
-			});
+			expect(reopened.loadMirrorState()).toEqual({ watermarkId: "entry-7" });
+		} finally {
+			reopened.dispose();
+		}
+	});
+
+	it("ignores a legacy deliveredIds array instead of migrating state it never read", async () => {
+		// An earlier revision persisted every delivered entry id. Nothing consumed
+		// it and it was rewritten in full each turn, so it was removed; sessions
+		// written before that still contain it and must not break the watermark.
+		const agentDir = tempAgentDir();
+		const sessionFile = advisorSessionPath(agentDir, "exec-legacy");
+		const options = {
+			executorSessionId: "exec-legacy",
+			executorCwd: agentDir,
+			model,
+			effort: undefined,
+			agentDir,
+		};
+		seedPersistedTurn(sessionFile, agentDir);
+
+		const first = await createAdvisorDriver(options);
+		first.saveMirrorState({
+			watermarkId: "entry-7",
+			// Simulate a pre-removal session file.
+			...({ deliveredIds: ["entry-6", "entry-7"] } as unknown as Record<string, never>),
+		});
+		first.dispose();
+
+		const reopened = await createAdvisorDriver(options);
+		try {
+			expect(reopened.loadMirrorState()).toEqual({ watermarkId: "entry-7" });
 		} finally {
 			reopened.dispose();
 		}

@@ -291,9 +291,10 @@ async function askWithDriver(
 	}
 
 	// Success: commit the watermark and persist it into the advisor session so an
-	// executor /resume continues incrementally.
+	// executor /resume continues incrementally. Only the watermark is stored;
+	// see MirrorState for why the per-entry id list was dropped.
 	try {
-		driver.saveMirrorState({ watermarkId: plan.coveredIds[plan.coveredIds.length - 1], deliveredIds: plan.coveredIds });
+		driver.saveMirrorState({ watermarkId: plan.coveredIds[plan.coveredIds.length - 1] });
 	} catch {
 		// Bookkeeping only — a persistence failure must not fail the consultation.
 	}

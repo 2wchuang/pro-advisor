@@ -204,4 +204,47 @@ describe("repository guards", () => {
 			"release.yml",
 		);
 	});
+
+	// GUARD 6 — the incremental-delivery claim must stay scoped to what was
+	// actually measured.
+	//
+	// Live measurement (two consultations, one session) showed the plugin handing
+	// over 1.86 MB then 19 KB of executor context — but the provider still received
+	// the advisor's entire history (`cacheRead: 456,448` on the second call). An
+	// earlier tool description said it "only sends what changed since your last
+	// consultation", which reads as a provider-level or billing-level claim and is
+	// false. This guard fails if that overclaim returns.
+	it("never claims the provider receives only the delta", () => {
+		const registerSrc = readFileSync(join(repoRoot, "advisor", "register.ts"), "utf8");
+		const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+
+		// The tool description reaches the system prompt, so it is the highest-risk
+		// place for an overclaim.
+		const descStart = registerSrc.indexOf("const ADVISOR_DESCRIPTION");
+		const descEnd = registerSrc.indexOf("export const DEFAULT_PROMPT_SNIPPET");
+		expect(descStart, "ADVISOR_DESCRIPTION not found").toBeGreaterThan(-1);
+		expect(descEnd).toBeGreaterThan(descStart);
+		const description = registerSrc.slice(descStart, descEnd);
+
+		expect(description).not.toMatch(/only sends what changed/i);
+		// It must actively disclaim the token saving rather than merely omit it.
+		expect(description).toMatch(/not a token saving/i);
+
+		// The README must carry the measured figures, not just a hedge.
+		expect(readme).toMatch(/cacheRead/);
+		expect(readme).toMatch(/456,448|456448/);
+	});
+
+	// GUARD 7 — the watermark is the only mirror state; a per-entry id list was
+	// measured growing every turn (9,381 B at 836 ids → 9,469 B at 844) while
+	// nothing ever read it.
+	it("mirror state does not persist a per-entry id list again", () => {
+		const pool = readFileSync(join(repoRoot, "advisor", "session-pool.ts"), "utf8");
+		const exec = readFileSync(join(repoRoot, "advisor", "execute.ts"), "utf8");
+
+		const iface = pool.slice(pool.indexOf("export interface MirrorState"), pool.indexOf("export interface AdvisorSessionDriver"));
+		expect(iface, "MirrorState not found").not.toBe("");
+		expect(iface).not.toMatch(/deliveredIds\??:/);
+		expect(exec).not.toMatch(/saveMirrorState\(\{\s*watermarkId:[^}]*deliveredIds/);
+	});
 });

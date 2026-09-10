@@ -47,10 +47,19 @@ const ADVISOR_SESSION_SUBDIR = "pro-advisor";
 export const MIRROR_STATE_CUSTOM_TYPE = "pro-advisor-mirror-state";
 
 export interface MirrorState {
-	/** Newest executor entry already delivered to the advisor. */
+	/**
+	 * Newest executor entry already delivered to the advisor.
+	 *
+	 * This is the whole state. `planMirror()` derives divergence from this id
+	 * alone: if it is absent, or no longer present on the current branch, the
+	 * next delivery rebases. An earlier revision also persisted the full list of
+	 * delivered ids "for divergence detection", but nothing ever read it — it was
+	 * rewritten in full on every single call, so its custom entry grew with the
+	 * square of the session length. Measured live: 9,381 bytes at 836 ids,
+	 * 9,469 bytes at 844 ids, every turn. Removed rather than kept for a use
+	 * that does not exist.
+	 */
 	watermarkId?: string;
-	/** Every executor entry id delivered so far, for divergence detection. */
-	deliveredIds?: string[];
 }
 
 /**
@@ -240,12 +249,10 @@ class PiAdvisorSessionDriver implements AdvisorSessionDriver {
 			if ((entry as { customType?: string }).customType !== MIRROR_STATE_CUSTOM_TYPE) continue;
 			const data = (entry as { data?: MirrorState }).data;
 			if (!data) continue;
-			state = {
-				watermarkId: typeof data.watermarkId === "string" ? data.watermarkId : state.watermarkId,
-				deliveredIds: Array.isArray(data.deliveredIds)
-					? data.deliveredIds.filter((v): v is string => typeof v === "string")
-					: state.deliveredIds,
-			};
+			// Only watermarkId is read. Older session files may carry a
+			// `deliveredIds` array from a prior revision; it is ignored rather than
+			// migrated, because it was never consumed.
+			if (typeof data.watermarkId === "string") state = { watermarkId: data.watermarkId };
 		}
 		return state;
 	}

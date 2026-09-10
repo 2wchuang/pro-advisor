@@ -49,19 +49,32 @@ executor session:
   genuine continuation rather than a cold restart
 
 **What is claimed:** session continuity, a stable append-only prefix, and no
-re-transmission of already-delivered executor context.
+re-transmission of already-delivered executor context **into the advisor's
+session**.
+
+**Measured, not assumed.** Two live consultations in one executor session, with a
+~1.8 MB executor branch:
+
+| | executor context handed over (JSONL) | provider `usage.input` | provider `cacheRead` |
+| --- | --- | --- | --- |
+| 1st call | 1,859,126 B | 456,675 | 0 |
+| 2nd call | **19,239 B** | **7,440** | **456,448** |
+
+So the incremental delivery is real — the second call handed over 19 KB instead of
+1.86 MB. But it is a statement about *what the plugin writes into the advisor
+session*, not about what the provider receives.
 
 **What is NOT claimed:**
 
-- **No provider-side cache guarantee.** The advisor's own history still grows,
-  so request size still grows with it. Any prompt-cache benefit depends on the
-  provider and is not something this package can promise.
-- **Not a guaranteed token saving.** On a long-lived advisor session, the
-  accumulated advisor history can eventually cost more per turn than a
-  stateless one. "Only sends what changed" describes the *executor* context, not
-  the whole request.
+- **No provider-side cache guarantee.** `cacheRead: 456,448` on the second call
+  shows the advisor's history is re-serialised and re-sent to its provider in
+  full, exactly like any other chat session; the executor delta is a small
+  addition to an unchanged prefix. Whether that prefix is billed or served from
+  cache is the provider's decision, and this package cannot promise it.
+- **Not a guaranteed token saving.** On a long-lived advisor session the
+  accumulated advisor history can cost more per turn than a stateless call would.
 - **Not faster by construction.** Continuity is the goal; speed is a side
-  effect, not a contract.
+effect, not a contract.
 
 ## Session identity
 
@@ -75,6 +88,21 @@ The advisor session is keyed by the executor session id, so:
 | `/resume` | reopens the **same** advisor session — same id, same history, same mirror watermark |
 | `/advisor` → different model | `setModel()` on the same session; identity survives the switch |
 | `/advisor` → No advisor | sessions disposed; a later re-enable starts fresh |
+
+### Known risk: stale bias in a long-lived advisor session
+
+The advisor's session accumulates its own prior conclusions. If an early
+consultation reasoned from a premise that later turned out to be wrong, that
+reasoning stays in its history and can keep colouring later advice. The
+stateless upstream design re-read the current branch every call and so carried no
+such residue.
+
+`planMirror()` rebases when the watermark is gone or a compaction intervened, and
+`buildRebaseContext()` tells the advisor that earlier transcript content is
+superseded. **That is prompt wording, not demonstrated forgetting** — no test yet
+shows that the advisor actually withdraws a stale conclusion after a rebase. Until
+one does, treat this as an open risk rather than a solved problem, and prefer
+`/new` when a line of reasoning has gone definitively wrong.
 
 Sessions are stored under `~/.pi/agent/pro-advisor/`. Mirror bookkeeping (the
 "already delivered" watermark) is written into the advisor session file itself

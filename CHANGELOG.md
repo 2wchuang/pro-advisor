@@ -14,6 +14,44 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-02-18
+
+Found by consulting the fork's own advisor twice in one live session and then
+checking its claims against the session file and provider usage figures rather
+than accepting them.
+
+### Fixed
+
+- **The tool description overclaimed.** It said a follow-up call "only sends what
+  changed since your last consultation". Measured over two real consultations in
+  a session with a ~1.8 MB branch:
+
+  | | executor context handed over (JSONL) | provider `usage.input` | `cacheRead` |
+  | --- | --- | --- | --- |
+  | 1st call | 1,859,126 B | 456,675 | 0 |
+  | 2nd call | 19,239 B | 7,440 | 456,448 |
+
+  The incremental delivery is real, but only for what the plugin writes into the
+  advisor session. `cacheRead: 456,448` shows the advisor's history is still
+  re-serialised and re-sent to its provider in full. The description now states
+  that explicitly, and a guard fails if the old wording returns.
+
+- **Removed dead mirror state.** `MirrorState.deliveredIds` was written on every
+  call and never read — `planMirror()` derives divergence from `watermarkId`
+  alone. Its custom entry was rewritten in full each turn, growing with the square
+  of session length (measured: 9,381 B at 836 ids, 9,469 B at 844). Sessions
+  written by an earlier revision still load; the stale array is ignored rather
+  than migrated.
+
+### Added
+
+- README now reports the measured figures and documents the open stale-bias risk:
+  a long-lived advisor session keeps its own prior conclusions, and
+  `buildRebaseContext()` is prompt wording, not demonstrated forgetting. No test
+  yet shows the advisor withdraws a stale conclusion after a rebase, so it is
+  recorded as a risk with `/new` as the workaround rather than claimed as solved.
+- Guards 6 and 7 in `repo-guards.test.ts`, both mutation-tested.
+
 ## [0.2.1] - 2026-02-18
 
 ### Added
