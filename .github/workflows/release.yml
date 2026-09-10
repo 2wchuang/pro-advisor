@@ -82,17 +82,50 @@ jobs:
       - name: Pack (dry run)
         run: npm run pack:check
 
+      # A workflow_dispatch run must NOT publish. The `push` guard below already
+      # skips it, but the Summary step then reported "Published" for a release that
+      # never happened — a false green light in the release path. Derive a single
+      # `publishing` flag and let both steps read it.
+      - name: Decide whether this run publishes
+        id: mode
+        env:
+          # Route the event/input through env rather than interpolating ${{ }}
+          # straight into the script. The input is typed boolean so it is already
+          # constrained, but this keeps the shell body free of expression
+          # substitution entirely.
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ github.event.inputs.dry-run }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "publishing=true" >> "$GITHUB_OUTPUT"
+          elif [ "$DRY_RUN" = "false" ]; then
+            # Manual dispatch with dry-run explicitly disabled: publish.
+            echo "publishing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publishing=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
-        if: github.event_name == 'push'
+        if: steps.mode.outputs.publishing == 'true'
         run: npm publish
 
       - name: Summary
+        env:
+          PUBLISHING: ${{ steps.mode.outputs.publishing }}
         run: |
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
-          {
-            echo "### Published \`$name@$version\`"
-            echo
-            echo "- Auth: OIDC trusted publishing (no long-lived token)"
-            echo "- npm: https://www.npmjs.com/package/$name/v/$version"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISHING" = "true" ]; then
+            {
+              echo "### Published \`$name@$version\`"
+              echo
+              echo "- Auth: OIDC trusted publishing (no long-lived token)"
+              echo "- npm: https://www.npmjs.com/package/$name/v/$version"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Dry run — nothing published"
+              echo
+              echo "Validated \`$name@$version\` (checks, pack, preflight) and stopped short of publishing."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

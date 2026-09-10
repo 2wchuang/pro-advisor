@@ -205,8 +205,40 @@ describe("repository guards", () => {
 		);
 	});
 
-	// GUARD 6 — the incremental-delivery claim must stay scoped to what was
-	// actually measured.
+	// GUARD 6 — a dry run must not claim it published.
+	//
+	// The workflow declared a `dry-run` input (default true) but referenced it
+	// nowhere: a workflow_dispatch skipped Publish on the `push` guard yet still
+	// printed "### Published" in the job summary. That is a false green light in
+	// the release path — the same failure mode as the tsconfig `include` that
+	// checked no files while exiting 0. Verified by mutation: deleting the
+	// `steps.mode.outputs.publishing` condition fails this test.
+	it("the release workflow honours its dry-run input instead of reporting a publish that did not happen", () => {
+		const workflow = readFileSync(join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
+		const workflowCode = stripYamlComments(workflow);
+
+		// The input is declared...
+		expect(workflowCode, "release.yml should declare a dry-run input").toMatch(/dry-run:/);
+
+		// ...and actually read. Declaring an input no step consults is the bug: the
+		// toggle appears to work while doing nothing.
+		expect(
+			workflowCode,
+			"the dry-run input is declared but never read, so toggling it changes nothing",
+		).toMatch(/github\.event\.inputs\.dry-run/);
+
+		// Publish and Summary must share one decision, so the summary cannot report
+		// a publish that the publish step skipped.
+		expect(workflowCode, "Publish must be gated on the shared publishing flag").toMatch(
+			/publishing == 'true'/,
+		);
+		expect(
+			workflowCode,
+			"the Summary step must not unconditionally claim the package was published",
+		).toMatch(/Dry run — nothing published/);
+	});
+
+
 	//
 	// Live measurement (two consultations, one session) showed the plugin handing
 	// over 1.86 MB then 19 KB of executor context — but the provider still received
