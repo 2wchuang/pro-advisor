@@ -6,6 +6,7 @@ import {
 	ADVISOR_TOOL_NAME,
 	DEFAULT_PROMPT_GUIDELINES,
 	DEFAULT_PROMPT_SNIPPET,
+	UPSTREAM_PROMPT_GUIDELINES,
 	loadAdvisorConfig,
 	registerAdvisorTool,
 	saveAdvisorConfig,
@@ -19,12 +20,41 @@ function writeConfig(data: Record<string, unknown>): void {
 }
 
 describe("registerAdvisorTool — guidance overrides", () => {
-	it("defaults require surfacing advisor guidance in a visible reply", () => {
+	// Upstream asserted the OPPOSITE of these three: that the defaults require
+	// restating advisor guidance in every visible reply. That requirement is the
+	// documented cause of the executor reporting to the advisor instead of the
+	// user (docs/ISSUES.md I-2/I-4), so the assertion is inverted deliberately.
+	it("defaults make the user, not the advisor, the decision-maker", () => {
+		expect(DEFAULT_PROMPT_GUIDELINES.some((g) => g.includes("decision-maker"))).toBe(true);
+		expect(DEFAULT_PROMPT_GUIDELINES.some((g) => g.includes("the user wins"))).toBe(true);
+	});
+
+	it("defaults forbid attributing the advisor's views to the user", () => {
 		expect(
 			DEFAULT_PROMPT_GUIDELINES.some(
-				(guideline) => guideline.includes("visible reply") && guideline.includes("collapsed tool results"),
+				(g) => g.includes("never to the user") || g.includes("Attribution"),
 			),
 		).toBe(true);
+	});
+
+	it("defaults do NOT mandate calling the advisor before substantive work", () => {
+		const joined = DEFAULT_PROMPT_GUIDELINES.join("\n");
+		expect(joined).not.toMatch(/BEFORE substantive work/i);
+		expect(joined).not.toMatch(/at least once before committing/i);
+		// A task may legitimately use none.
+		expect(joined).toContain("no minimum number of calls");
+	});
+
+	it("defaults do NOT require restating advisor guidance in every visible reply", () => {
+		const joined = DEFAULT_PROMPT_GUIDELINES.join("\n");
+		expect(joined).not.toContain("next visible reply");
+		expect(joined).not.toContain("collapsed tool results");
+	});
+
+	it("upstream guidelines are retained for migration reference", () => {
+		// Kept so the removed behaviour stays inspectable rather than erased.
+		expect(UPSTREAM_PROMPT_GUIDELINES.length).toBeGreaterThan(0);
+		expect(DEFAULT_PROMPT_GUIDELINES).not.toEqual(UPSTREAM_PROMPT_GUIDELINES);
 	});
 
 	it("uses built-in defaults when no config file exists", () => {
