@@ -104,6 +104,32 @@ describe("formatAdvisorStatus — honesty of the rendering", () => {
 		expect(lines[0]).toContain("not configured");
 	});
 
+	it("explains why compaction is disabled next to the size it explains", () => {
+		// The growing file size reads like a leak on its own. It is deliberate: see
+		// docs/ISSUES.md I-7. The status output must say so, and must name the escape.
+		const lines = formatAdvisorStatus({
+			model: "a/m",
+			sessions: [{ executorSessionId: "e", advisorSessionId: "a", turns: 2, activeTools: 0, sessionBytes: 4096 }],
+			totalBytes: 4096,
+		});
+		const joined = lines.join("\n");
+
+		expect(joined).toMatch(/Compaction: disabled/);
+		expect(joined).toContain("/new");
+		// It must also warn that failures enlarge the session, since that is the
+		// non-obvious half of the growth.
+		expect(joined).toMatch(/failed delivery is persisted/i);
+		// The disclaimer must still hold after adding lines.
+		for (const line of lines) {
+			if (/\btokens?\b|\bcost\b/i.test(line)) expect(line).toContain("not a token or cost figure");
+		}
+	});
+
+	it("omits the compaction note when there are no sessions", () => {
+		const lines = formatAdvisorStatus({ sessions: [], totalBytes: 0 });
+		expect(lines.join("\n")).not.toContain("Compaction:");
+	});
+
 	it("never presents session bytes as a token or cost figure", () => {
 		const lines = formatAdvisorStatus({
 			model: "a/m",

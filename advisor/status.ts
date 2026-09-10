@@ -104,6 +104,15 @@ export function formatAdvisorStatus(status: AdvisorStatus): string[] {
 		);
 	}
 	lines.push(`Total on disk: ${formatBytes(status.totalBytes)} (history size, not a token or cost figure)`);
+	// Without this line the growing figure reads like a leak. Compaction is off
+	// deliberately: Pi's summarizer is built for the executor, and applying it to
+	// an advisor session — whose transcript mirrors the executor's work — made the
+	// advisor adopt the executor's identity. See docs/ISSUES.md I-7.
+	lines.push(
+		"Compaction: disabled (keeps the advisor's own identity; the size above only grows for this reason). " +
+			"Use /new to start a fresh advisor session when it gets unwieldy. Repeated provider failures also enlarge it, " +
+			"because a failed delivery is persisted and re-sent.",
+	);
 	return lines;
 }
 

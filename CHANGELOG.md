@@ -14,6 +14,33 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-02-18
+
+### Added
+
+- `/advisor-status` now explains *why* the on-disk figure only grows. Without it a
+  rising number reads like a leak; the line states that compaction is disabled to
+  preserve the advisor's identity (I-7) and that `/new` is the escape.
+
+### Documented
+
+- Verified the failure path measured in a live session. Comparing delivered text
+  across three calls: 77,988 chars (failed), 97,752 (failed), 115,240 (succeeded).
+  The first two share a **77,938-character common prefix — 99.94%** — so a failed
+  delivery is re-sent almost verbatim with the delta appended.
+
+  Cause: `session.prompt()` persists the user message before contacting the
+  provider, and `runTurn()`'s catch can only return `{stopReason: "error"}`; it
+  cannot roll back what was written. The watermark correctly stays put, so the
+  next call re-delivers.
+
+  This is a self-reinforcing shape rather than the "bounded degradation" it
+  resembles: each failure enlarges the session, and a larger context makes the
+  next failure likelier. Recovery happened after two failures in the observed
+  session and no runaway spiral was seen, so it is recorded as an observed hazard
+  with `/new` as the recovery path — not claimed as a proven defect, and not
+  patched without evidence of harm.
+
 ## [0.2.3] - 2026-02-18
 
 ### Fixed
