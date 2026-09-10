@@ -29,6 +29,27 @@ function stripComments(source: string): string {
 	return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/**
+ * Strip `#` line comments. Needed for YAML, where `#` — not `//` — starts a
+ * comment; the release workflow's header comment mentions the very tokens
+ * (NPM_TOKEN) that the guard below asserts are absent from the code.
+ */
+function stripYamlComments(source: string): string {
+	return source
+		.split("\n")
+		.map((line) => {
+			// Keep a leading '#' only when it is not a comment marker mid-line.
+			const idx = line.indexOf("#");
+			if (idx === -1) return line;
+			// A '#' inside a quoted string is content, not a comment.
+			const before = line.slice(0, idx);
+			const quotes = (before.match(/'/g) ?? []).length + (before.match(/"/g) ?? []).length;
+			if (quotes % 2 === 1) return line;
+			return before;
+		})
+		.join("\n");
+}
+
 describe("repository guards", () => {
 	// GUARD 1 — the tsconfig include blind spot.
 	//
@@ -109,5 +130,78 @@ describe("repository guards", () => {
 		expect(defaultsCode).not.toMatch(/BEFORE substantive work/i);
 		expect(defaultsCode).not.toMatch(/next visible reply/i);
 		expect(defaultsCode).not.toMatch(/at least once before committing/i);
+	});
+
+	// GUARD 4 — the release workflow's filename is load-bearing.
+	//
+	// npm's trusted-publisher config stores the workflow FILENAME and matches it
+	// exactly; a renamed or moved workflow breaks publishing with an opaque
+	// 400 Bad Request at release time. docs/RELEASING.md tells the user which name
+	// to type, so the two must not drift apart.
+	it("the release workflow filename matches what the setup docs tell users to enter", () => {
+		const workflowDir = join(repoRoot, ".github", "workflows");
+		const workflows = readdirSync(workflowDir).filter((f) => /\.ya?ml$/.test(f));
+		expect(workflows, "expected exactly one release workflow").toContain("release.yml");
+
+		const workflow = readFileSync(join(workflowDir, "release.yml"), "utf8");
+		const docs = readFileSync(join(repoRoot, "docs", "RELEASING.md"), "utf8");
+		const workflowCode = stripYamlComments(workflow);
+
+		for (const filename of workflows) {
+			expect(docs, `docs/RELEASING.md must name the workflow file ${filename}`).toContain(filename);
+		}
+
+		// OIDC is the whole point: without id-token: write, npm publish fails.
+		expect(workflowCode).toMatch(/id-token:\s*write/);
+
+		// The workflow must guard against the bootstrap trap rather than let a
+		// first-time publish fail with an unreadable registry error.
+		expect(workflowCode).toContain("npm view");
+
+		// It must not rely on a long-lived NPM_TOKEN secret — that is the practice
+		// trusted publishing exists to replace.
+		expect(workflowCode).not.toMatch(/NPM_TOKEN|secrets\./);
+	});
+
+	// GUARD 5 — the workflow's published identity must track package.json rather
+	// than hardcode a name, so the two cannot drift.
+	it("the release workflow derives its identity from package.json", () => {
+		const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
+			name: string;
+			repository?: { url?: string };
+		};
+		const workflowCode = stripYamlComments(readFileSync(join(repoRoot, ".github", "workflows", "release.yml"), "utf8"));
+		const docs = readFileSync(join(repoRoot, "docs", "RELEASING.md"), "utf8");
+
+		// Reading name/version from package.json at runtime is what makes drift
+		// impossible; a hardcoded package name here would be the risk.
+		expect(workflowCode).toContain("require('./package.json').name");
+		expect(workflowCode).toContain("require('./package.json').version");
+
+		// The docs are what a human follows, so they must name the real package.
+		expect(docs, `docs/RELEASING.md should reference ${pkg.name}`).toContain(pkg.name);
+
+		// The repo slug in docs must match package.json's repository URL.
+		const slug = /github\.com[/:]([^/]+\/[^/.]+)/.exec(pkg.repository?.url ?? "")?.[1];
+		expect(slug, "package.json repository URL should contain a github owner/repo slug").toBeDefined();
+		const [owner, repo] = slug!.split("/");
+
+		// Check the trusted-publisher TABLE, not just "does this word appear". The
+		// repo name also occurs in cd paths and the package name, so a plain
+		// substring assertion passes even when the table cell is wrong.
+		const row = (label: string): string => {
+			const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+			// Match: | Label | `value` |   (backticks optional)
+			const re = new RegExp("^\\|\\s*" + escaped + "\\s*\\|\\s*`?([^`|\\s]+)`?\\s*\\|", "m");
+			const m = re.exec(docs);
+			expect(m, `docs/RELEASING.md has no '${label}' table row`).not.toBeNull();
+			return m![1]!;
+		};
+
+		expect(row("Organization or user"), "trusted-publisher owner must match the repo URL").toBe(owner!);
+		expect(row("Repository"), "trusted-publisher repository must match the repo URL").toBe(repo!);
+		expect(row("Workflow filename"), "trusted-publisher workflow must be the real workflow filename").toBe(
+			"release.yml",
+		);
 	});
 });

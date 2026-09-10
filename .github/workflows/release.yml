@@ -1,0 +1,98 @@
+name: Release
+
+# Trusted publishing (OIDC) — no NPM_TOKEN secret is stored anywhere.
+#
+# IMPORTANT — bootstrap limitation:
+#   npm does NOT support configuring a trusted publisher for a package that does
+#   not exist yet. The trusted-publisher form lives on the package's own npm
+#   settings page, so a package that has never been published has nowhere to
+#   configure it, and an OIDC publish of a brand-new package fails.
+#   See https://github.com/npm/documentation/issues/1926 (open as of 2026-09).
+#
+#   Therefore the FIRST publish of a new package must be done manually, after
+#   which this workflow handles every subsequent release. See docs/RELEASING.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Pack and validate without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # Required for OIDC; without this npm publish fails with 400/403.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Trusted publishing requires npm >= 11.5.1, which needs Node >= 22.14.
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - name: Verify npm version supports trusted publishing
+        run: |
+          npm_version=$(npm --version)
+          echo "npm $npm_version / node $(node --version)"
+          node -e '
+            const [maj, min, pat] = process.argv[1].split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            if (!ok) { console.error("npm " + process.argv[1] + " is too old for trusted publishing (need >= 11.5.1)"); process.exit(1); }
+          ' "$npm_version"
+
+      - run: npm ci
+
+      # Type-check plus the full suite, including repo-guards.test.ts which fails
+      # if a previously-removed advisor guideline is reintroduced.
+      - name: Check
+        run: npm run check
+
+      - name: Verify the tag matches package.json version
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "Tag v$tag matches package.json $pkg"
+
+      - name: Preflight — confirm the trusted publisher can be reached
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name" version >/dev/null 2>&1; then
+            echo "$name already exists on the registry — OIDC publish is supported."
+          else
+            echo "::error::$name is not on the registry yet. Trusted publishing cannot create a package for the first time (npm/documentation#1926). Bootstrap it with a manual first publish, then re-run. See docs/RELEASING.md."
+            exit 1
+          fi
+
+      - name: Pack (dry run)
+        run: npm run pack:check
+
+      - name: Publish
+        if: github.event_name == 'push'
+        run: npm publish
+
+      - name: Summary
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          {
+            echo "### Published \`$name@$version\`"
+            echo
+            echo "- Auth: OIDC trusted publishing (no long-lived token)"
+            echo "- npm: https://www.npmjs.com/package/$name/v/$version"
+          } >> "$GITHUB_STEP_SUMMARY"

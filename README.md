@@ -10,12 +10,25 @@ unchanged; the advisor session layer is replaced. See
 
 ## Install
 
+From git — no npm account or registry needed:
+
+```bash
+pi install git:github.com/2wchuang/pro-advisor@v0.2.0
 ```
+
+Or from npm, once published:
+
+```bash
 pi install npm:@2wchuang/pro-advisor
 ```
 
 Restart your Pi session. Run `/advisor` to pick the reviewer model — nothing
 happens until you do.
+
+> If you were running upstream `@juicesharp/rpiv-advisor`, **replace** that entry
+> in `~/.pi/agent/settings.json` rather than adding this one: both register a tool
+> named `advisor`, and they share the same config file and session directory.
+> See [docs/RELEASING.md](docs/RELEASING.md) for the publisher-side setup.
 
 ## What this does and does not claim
 
