@@ -70,7 +70,46 @@ npm publish         # 启用 2FA 后会提示输入 OTP
 npm view @2wchuang/pro-advisor version
 ```
 
-### 3. 在 npm 上配置 Trusted Publisher
+### 3. 配置 Trusted Publisher
+
+**推荐用 CLI，不需要浏览器。** npm 11.19+ 提供 `npm trust`：
+
+```bash
+npm trust github @2wchuang/pro-advisor \
+  --file release.yml \
+  --repository 2wchuang/pro-advisor \
+  --allow-publish
+```
+
+先加 `--dry-run` 可以校验参数而**不写入、不需要 OTP**：
+
+```bash
+npm trust github @2wchuang/pro-advisor \
+  --file release.yml --repository 2wchuang/pro-advisor --allow-publish --dry-run
+```
+
+真实执行会要求 2FA（与发布一样，走浏览器确认）。完成后核对：
+
+```bash
+npm trust list @2wchuang/pro-advisor
+```
+
+预期输出：
+
+```
+type: github
+id: <uuid>
+file: release.yml
+repository: 2wchuang/pro-advisor
+permissions: publish, stage publish
+```
+
+`--file` **只写文件名** `release.yml`，不加 `.github/workflows/` 前缀。
+不加 `--environment`，因为 workflow 未使用 GitHub environment；填了会导致
+OIDC 声明不匹配。
+
+<details>
+<summary>或者用网页配置</summary>
 
 包页面 → **Settings** → **Trusted Publisher** → 选 **GitHub Actions**，填：
 
@@ -82,9 +121,12 @@ npm view @2wchuang/pro-advisor version
 
 > ⚠️ **Workflow filename 必须与实际文件名完全一致**（`release.yml`，不是
 > `.github/workflows/release.yml`）。填错会得到 `400 Bad Request`。
+> **Environment name 留空** —— workflow 未使用 GitHub environment。
 
-**不要**填 `Environment name` —— 本 workflow 未使用 GitHub environment，
-填了会导致 OIDC 声明不匹配。
+</details>
+
+仓库里的 `repo-guards.test.ts` 会校验上表的 owner / repository / workflow
+filename 与 `package.json` 一致，改错会导致构建失败。
 
 ---
 

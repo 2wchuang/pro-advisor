@@ -14,6 +14,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-18
+
+### Added
+
+- `npm trust` CLI path documented in `docs/RELEASING.md` as the preferred way to
+  configure the trusted publisher — it validates with `--dry-run` without
+  requiring 2FA, where the web form needs a browser session.
+
+### Changed
+
+- README now lists npm as the primary install path (it is published) and drops the
+  stale "once published" wording.
+
+### Verified
+
+- First published release `0.2.0`, bootstrapped manually as npm's OIDC trusted
+  publishing cannot create a package that does not yet exist
+  (npm/documentation#1926).
+- Subsequent releases publish from GitHub Actions over OIDC with no stored token.
+
 ## [0.2.0] - 2026-02-18
 
 ### Changed

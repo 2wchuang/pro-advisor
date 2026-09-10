@@ -10,16 +10,16 @@ unchanged; the advisor session layer is replaced. See
 
 ## Install
 
-From git — no npm account or registry needed:
-
-```bash
-pi install git:github.com/2wchuang/pro-advisor@v0.2.0
-```
-
-Or from npm, once published:
+From npm:
 
 ```bash
 pi install npm:@2wchuang/pro-advisor
+```
+
+Or from git — no npm account or registry involved:
+
+```bash
+pi install git:github.com/2wchuang/pro-advisor@v0.2.1
 ```
 
 Restart your Pi session. Run `/advisor` to pick the reviewer model — nothing
