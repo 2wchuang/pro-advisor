@@ -1,0 +1,8 @@
+{
+  "name": "@2wchuang/pro-advisor-test-utils",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Test fixtures vendored from rpiv-mono/packages/test-utils (MIT).",
+  "exports": { ".": "./index.ts" }
+}
