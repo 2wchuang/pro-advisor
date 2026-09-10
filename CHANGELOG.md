@@ -14,6 +14,34 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-02-18
+
+### Fixed
+
+- **I-8 — a compaction must replace what it summarised, not accumulate.** A
+  rebase re-sent the full transcript while the previous delivery was still in the
+  advisor session, and the provider rejected the call outright:
+  `prompt is too long: 1,387,946 tokens > 1,000,000 maximum`. The advisor became
+  unusable, and the failed call grew its session file from 2.2 MB to 4.6 MB.
+
+  Verified by arithmetic against the live failure: sending only the rebase was
+  ~720,130 tokens, sending both deliveries ~1,383,871, and the provider reported
+  1,387,946 — 99.7% agreement that both were sent.
+
+  Cause: `planMirror` rendered `getBranch()`, whose entries include everything a
+  compaction already summarised, so a summary was additive rather than
+  substituting. Upstream's `buildContextEntries()` drops every entry before the
+  summary's `firstKeptEntryId` and therefore shrinks. On the failing session,
+  resolving the context discards 1,049 of 1,231 entries, taking the payload from
+  ~1,470,688 to ~214,231 tokens — 85% smaller.
+
+  This is the direct consequence of the I-7 fix: disabling the advisor session's
+  auto-compaction removed its only automatic shrink. The two changes are a pair,
+  and reverting either alone restores unbounded growth.
+
+  The watermark still walks the raw branch: it is committed as one of its ids and
+  must stay findable on the leaf path, or every later call would rebase forever.
+
 ## [0.2.4] - 2026-02-18
 
 ### Added

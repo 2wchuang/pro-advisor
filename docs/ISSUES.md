@@ -135,6 +135,60 @@ call 3 与 call 4 的公共前缀为 **77,938 / 77,988 = 99.94%** —— 失败�
 
 ---
 
+## I-8 rebase 把压缩摘要当作追加，导致 advisor 彻底失效
+
+**状态：已修** — `advisor/mirror.ts` 的 `fullTranscriptEntries()` 改用 `sessionManager.buildContextEntries()` 渲染全量投递；`coveredIds` 仍走原始分支。回归测试 4 个 + 变异验证。
+
+**这是 I-7 修复的直接后果**，必须一起看：I-7 禁用了 advisor 会话的自动压缩（防止身份反转），而那**同时移除了唯一的自动收缩机制**。没有压缩，下面的翻倍无处消解 —— 两个修复不能分开评估。
+
+**证据（实测，非推断）**：本会话中一次 advisor 调用**直接失败**：
+
+```
+Codex error: prompt is too long: 1,387,946 tokens > 1,000,000 maximum
+request_id: req_vrtx_011CeuZvMAzgQg8zbUVsNzqb
+```
+
+逐行核算 advisor 会话文件，确认 provider 收到的是**两份投递的叠加**：
+
+| 假设 | 估算 tokens | 对照实测 1,387,946 |
+| --- | --- | --- |
+| 只发 line 7（rebase 全量） | ≈ 720,130 | ✗ |
+| line 4 + line 7 都发 | ≈ 1,383,871 | ✓ **99.7% 吻合** |
+
+```
+line  4: user      2,203,618 B   ← 首次投递（初始全量）2,015,715 字符
+line  5: assistant    10,626 B
+line  6: custom          169 B   ← 水位线
+line  7: user      2,390,833 B   ← rebase 全量重述 2,173,745 字符
+line  8: assistant        648 B   ← 失败（stop=error），仍写入
+```
+
+**根因（两层）**：
+
+1. **`buildRebaseContext()` 说 `supersedes all earlier transcript content`，但这只对 advisor 的「理解」成立，对 provider 的「输入」不成立。** 旧投递仍在会话历史里，每轮都重发。计划里 rebase 是「替代」，传输上是「叠加」。
+
+2. **`planMirror` 用 `getBranch()` 渲染全量，而 `getBranch()` 返回从根到叶的全部条目**（`session-manager.js:958`），**包含已被压缩摘要取代的原始消息**。于是压缩摘要在本 fork 里是**追加**，不是**替代** —— 内容只增不减。
+
+对照上游：`buildContextEntries()` 在压缩点**丢弃** `firstKeptEntryId` 之前的原始条目（`session-manager.js:220-222`）。**上游的载荷随压缩变小；带这个缺陷的 fork 只会变大。**
+
+**为什么这不是罕见路径**：执行器压缩是**必然发生**的（255K 阈值，本会话已触发 2 次）。每次压缩 → `planMirror` 判 `full=true` → rebase 重发全量。所以这个缺陷**必然走到**，只是时间问题。
+
+**修复效果（用失败现场的执行器会话离线核算）**：
+
+| 方案 | 载荷 | 估算 tokens |
+| --- | --- | --- |
+| `getBranch()` 全量（缺陷） | 4,882,683 B | ≈ 1,470,688 ❌ 超限 |
+| `buildContextEntries()`（修复） | 711,247 B | ≈ 214,231 ✅ |
+| | **缩小 85.4%** | 丢弃 1,049 / 1,231 条 |
+
+**水位线仍走原始分支**：`coveredIds` 必须是原始分支上的 id，因为水位线从它提交，下次必须仍能在叶路径上找到。若让它随摘要缩小，下次会判定水位线缺失而**永远 rebase**。这是修复中最容易搞错的一点，已单独加测试。
+
+**降级路径**：源不提供 `buildContextEntries` 时回退到 `getBranch()`（正确但会累积）。错误但完整的转录胜过空转录。
+
+**未做的修改**：没有加主动的上下文窗口守卫（在超限前就拒绝调用）。理由同前 —— 先让正确的解析语义生效，观察是否还有余量问题；在拿到新证据前不加复杂度。
+
+---
+
 ## 上游未改动的相关缺陷（记录备查，非本 fork 引入）
 
 - `inventory.ts` 的 globalThis 单槽缓存按**工具名集合**失效，不按会话区分。多会话共用一个进程时，工具清单文本共享——这是有意的（进程级注册表），但意味着工具描述变化会反映到所有会话。

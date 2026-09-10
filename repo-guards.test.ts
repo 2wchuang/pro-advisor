@@ -291,4 +291,36 @@ describe("repository guards", () => {
 		const code = stripComments(readFileSync(join(repoRoot, "advisor", "session-pool.ts"), "utf8"));
 		expect(code).toContain("setAutoCompactionEnabled(false)");
 	});
+
+	// GUARD 9 — a compaction must replace what it summarised, never accumulate.
+	//
+	// I-7 disabled the advisor session's auto-compaction, which removed the only
+	// automatic shrink. That exposed the mirror's own growth: planMirror rendered
+	// getBranch(), whose entries include everything a compaction already
+	// summarised, so a rebase re-sent a full transcript on top of the copy already
+	// in the session. Measured live it produced
+	// `prompt is too long: 1,387,946 tokens > 1,000,000 maximum` — the advisor was
+	// unusable, and the failed call grew the file from 2.2 MB to 4.6 MB.
+	//
+	// GUARD 8 and this guard are a pair: disabling compaction is only safe while
+	// the mirror shrinks at a compaction. Reverting either one alone reintroduces
+	// unbounded growth.
+	it("resolves the transcript through buildContextEntries so a compaction shrinks the payload", () => {
+		const code = stripComments(readFileSync(join(repoRoot, "advisor", "mirror.ts"), "utf8"));
+
+		// The resolved context is what makes a summary replace its sources.
+		expect(code, "mirror.ts must resolve the context via buildContextEntries").toContain(
+			"buildContextEntries()",
+		);
+
+		// It must be reached from the function that renders a FULL transcript, not
+		// merely declared on the interface — that was the defect's shape.
+		const fn = /function fullTranscriptEntries[\s\S]*?\n}/.exec(code)?.[0];
+		expect(fn, "fullTranscriptEntries not found in mirror.ts").toBeDefined();
+		expect(fn!, "fullTranscriptEntries must consult buildContextEntries").toContain("buildContextEntries");
+
+		// The watermark must NOT shrink with the summary: coveredIds comes from the
+		// raw branch, or the next call sees it missing and rebases forever.
+		expect(code).toMatch(/const coveredIds = branch\.map/);
+	});
 });

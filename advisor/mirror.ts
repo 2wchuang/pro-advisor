@@ -17,6 +17,28 @@
  * Both trigger an explicit rebase: the transcript is re-stated in full and marked
  * as superseding earlier content. The advisor SESSION is retained — only the
  * mirrored transcript is reset — so the advisor keeps its own prior reasoning.
+ *
+ * CRITICAL — what "in full" means after a compaction.
+ *
+ * A compaction must REPLACE the entries it summarised, not append to them. Pi's
+ * own `buildContextEntries()` drops every entry before the summary's
+ * `firstKeptEntryId`, so the executor's resolved context SHRINKS at a compaction.
+ * Mirroring the raw branch instead made the summary purely additive: the mirrored
+ * transcript could only grow, and a rebase re-stated a full copy on top of the
+ * copy already in the advisor session.
+ *
+ * That is not a theoretical concern. Measured on a live session (docs/ISSUES.md
+ * I-8): an executor compaction triggered a rebase of 2,173,745 chars while the
+ * previous 2,015,715-char delivery was still in the session, and the provider
+ * rejected the call outright — `prompt is too long: 1,387,946 tokens > 1,000,000
+ * maximum`. Applying the same resolution here yields 214,231 tokens instead of
+ * 1,470,688 for that session, an 85% reduction, because 1,049 of 1,231 entries
+ * had already been superseded by the summary.
+ *
+ * The watermark still walks the RAW branch: it is an entry id that must remain
+ * findable on the leaf path, and the ids a delivery covers must not shrink when a
+ * summary replaces them — otherwise the next call would see the watermark as
+ * missing and rebase forever.
  */
 
 import { type SessionEntry, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
@@ -46,6 +68,13 @@ interface MirrorMessage {
 export interface MirrorSource {
 	getBranch(fromId?: string): SessionEntry[];
 	getEntry(id: string): SessionEntry | undefined;
+	/**
+	 * The resolved context: what Pi would actually send as LLM messages, with
+	 * superseded entries dropped at each compaction. Optional so the mirror stays
+	 * usable against a source that only exposes the raw branch; without it a
+	 * compaction falls back to the raw branch (correct, but additive).
+	 */
+	buildContextEntries?(): SessionEntry[];
 }
 
 function clip(text: string, limit: number): string {
@@ -144,27 +173,50 @@ export interface MirrorPlan {
 }
 
 /**
+ * The entries to send as a FULL transcript.
+ *
+ * Prefers the resolved context (compaction drops what it summarised) and only
+ * falls back to the raw branch when the source cannot resolve it. This is the
+ * fix for I-8: rendering the raw branch made a compaction summary additive, so
+ * every compaction grew the mirrored transcript instead of shrinking it.
+ */
+function fullTranscriptEntries(sessionManager: MirrorSource): SessionEntry[] {
+	if (typeof sessionManager.buildContextEntries === "function") {
+		const resolved = sessionManager.buildContextEntries();
+		// An empty resolved context would send nothing at all; the raw branch is the
+		// safer fallback, since a wrong-but-complete transcript beats an empty one.
+		if (resolved.length > 0) return resolved;
+	}
+	return sessionManager.getBranch();
+}
+
+/**
  * Decide what to deliver.
  *
  * A missing watermark, a watermark absent from the current branch, or a
  * compaction after the watermark all rebase. Otherwise only the tail is sent.
+ *
+ * `coveredIds` always walks the RAW branch, because the watermark is committed as
+ * one of its ids and must stay findable on the leaf path; `renderIds` uses the
+ * resolved context so a compaction replaces what it summarised.
  */
 export function planMirror(sessionManager: MirrorSource, watermarkId: string | undefined): MirrorPlan {
 	const branch = sessionManager.getBranch();
 	const coveredIds = branch.map((e) => e.id);
+	const fullIds = fullTranscriptEntries(sessionManager).map((e) => e.id);
 
 	if (!watermarkId) {
-		return { full: true, compacted: false, diverged: false, coveredIds, renderIds: coveredIds };
+		return { full: true, compacted: false, diverged: false, coveredIds, renderIds: fullIds };
 	}
 
 	const watermarkIndex = branch.findIndex((e) => e.id === watermarkId);
 	if (watermarkIndex < 0) {
-		return { full: true, compacted: false, diverged: true, coveredIds, renderIds: coveredIds };
+		return { full: true, compacted: false, diverged: true, coveredIds, renderIds: fullIds };
 	}
 
 	const tail = branch.slice(watermarkIndex + 1);
 	if (tail.some((e) => e.type === "compaction")) {
-		return { full: true, compacted: true, diverged: false, coveredIds, renderIds: coveredIds };
+		return { full: true, compacted: true, diverged: false, coveredIds, renderIds: fullIds };
 	}
 
 	return {
