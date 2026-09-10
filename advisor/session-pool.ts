@@ -39,28 +39,6 @@ import { ADVISOR_SYSTEM_PROMPT } from "./prompt.js";
 
 /** Directory under the agent dir holding advisor session files. */
 const ADVISOR_SESSION_SUBDIR = "pro-advisor";
-/**
- * Custom-entry type carrying mirror bookkeeping inside the advisor session file.
- * Custom entries never enter LLM context, so the watermark rides the session's
- * own persistence and survives /resume with no side-channel file.
- */
-export const MIRROR_STATE_CUSTOM_TYPE = "pro-advisor-mirror-state";
-
-export interface MirrorState {
-	/**
-	 * Newest executor entry already delivered to the advisor.
-	 *
-	 * This is the whole state. `planMirror()` derives divergence from this id
-	 * alone: if it is absent, or no longer present on the current branch, the
-	 * next delivery rebases. An earlier revision also persisted the full list of
-	 * delivered ids "for divergence detection", but nothing ever read it — it was
-	 * rewritten in full on every single call, so its custom entry grew with the
-	 * square of the session length. Measured live: 9,381 bytes at 836 ids,
-	 * 9,469 bytes at 844 ids, every turn. Removed rather than kept for a use
-	 * that does not exist.
-	 */
-	watermarkId?: string;
-}
 
 /**
  * The seam between `execute.ts` and a concrete advisor session.
@@ -84,10 +62,6 @@ export interface AdvisorSessionDriver {
 	currentModel(): Model<Api> | undefined;
 	/** Whether the advisor session exposes any tool it could call. */
 	activeToolNames(): string[];
-	/** Recover mirror bookkeeping persisted in the advisor session. */
-	loadMirrorState(): MirrorState;
-	/** Persist mirror bookkeeping into the advisor session. */
-	saveMirrorState(state: MirrorState): void;
 	/** Release the session. */
 	dispose(): void;
 }
@@ -263,25 +237,6 @@ class PiAdvisorSessionDriver implements AdvisorSessionDriver {
 
 	activeToolNames(): string[] {
 		return this.session.getActiveToolNames();
-	}
-
-	loadMirrorState(): MirrorState {
-		let state: MirrorState = {};
-		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type !== "custom") continue;
-			if ((entry as { customType?: string }).customType !== MIRROR_STATE_CUSTOM_TYPE) continue;
-			const data = (entry as { data?: MirrorState }).data;
-			if (!data) continue;
-			// Only watermarkId is read. Older session files may carry a
-			// `deliveredIds` array from a prior revision; it is ignored rather than
-			// migrated, because it was never consumed.
-			if (typeof data.watermarkId === "string") state = { watermarkId: data.watermarkId };
-		}
-		return state;
-	}
-
-	saveMirrorState(state: MirrorState): void {
-		this.sessionManager.appendCustomEntry(MIRROR_STATE_CUSTOM_TYPE, state);
 	}
 
 	dispose(): void {

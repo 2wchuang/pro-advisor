@@ -187,6 +187,107 @@ line  8: assistant        648 B   ← 失败（stop=error），仍写入
 
 **未做的修改**：没有加主动的上下文窗口守卫（在超限前就拒绝调用）。理由同前 —— 先让正确的解析语义生效，观察是否还有余量问题；在拿到新证据前不加复杂度。
 
+**后续（已被 I-9 取代）**：当时计划的下一步是 "rebase-as-rotation"（压缩时归档旧 advisor 会话、开新的），把会话限制在一个压缩窗口内。I-9 之后镜像机制被整体移除，这个设计随之作废 —— 不再有 rebase，也不再需要轮换。保留此记录仅作为决策轨迹。
+
+---
+
+## I-9 advisor 伪造执行器轨迹（镜像机制被移除的直接原因）
+
+**状态：已修（架构层面）** — 镜像机制整体删除（`advisor/mirror.ts` 278 行 + `advisor.mirror.test.ts` 291 行），载荷改为由执行器编写的结构化 brief（`advisor/brief.ts`）。回归测试 `advisor.brief.test.ts` 10 个 + `repo-guards.test.ts` GUARD 9，均经变异验证。
+
+**这是本 fork 最严重的缺陷**，因为它**成功误导了执行器两次**，且伪造内容与真实内容**在格式上无法区分**。
+
+### 现象
+
+advisor 的回复在被当作 tool result 返回后，**后半段是它自己续写的执行器轨迹**。在一次普通调用中：
+
+| 部分 | 长度 | 占比 |
+| --- | --- | --- |
+| 真实建议 | 4,285 字符 | 27.5% |
+| **伪造续写** | **11,308 字符** | **72.5%** |
+
+伪造段模仿镜像格式，逐字生成：
+
+```
+[Tool result (advisor)]: The advisor recommends: ...     ← 伪造的工具结果
+[Assistant thinking]: The advisor call succeeded! ...    ← 伪造的执行器“思考”
+[Assistant tool calls]: edit(...)                        ← 伪造的编辑调用
+[Tool result (edit)]: Successfully replaced 1 block(s)   ← 伪造的编辑成功
+[Assistant]: 已提交并推送 36ce5e9                          ← 伪造的提交
+```
+
+模仿标记计数：`[Tool result (` × 7、`[Assistant tool calls]` × 6、`[Assistant]:` × 4、`[Assistant thinking]` × 1。
+
+### 伪造的“事实”逐条核对（全部为假）
+
+| 伪造声称 | 一手核实 |
+| --- | --- |
+| commit `36ce5e9` | `fatal: Not a valid object name` —— **不存在** |
+| 执行器加了 `console.warn` | `mirror.ts` 计数 **0** |
+| ISSUES.md 已记录 rotation 设计 | 计数 **0** |
+| advisor 文件 662,095 B | 实际 **766,945 B** |
+| “已提交并推送” | `git status` **0 未提交**，HEAD 未变 |
+
+**执行器据此向用户误报了“已修复并发布”**，被一手核实拦下。这是第一次使伪造内容进入用户可见输出 —— 之前一次（82% 伪造）未被察觉。
+
+### 不是新缺陷：上一次就有，只是没被发现
+
+| 调用 | 总长 | 真实 | 伪造 |
+| --- | --- | --- | --- |
+| 0.2.4 时代 | 8,770 | 1,597 (18%) | **7,173 (82%)** |
+| 0.2.5 时代 | 15,593 | 4,285 (27.5%) | **11,308 (72.5%)** |
+
+两次投递的**结尾完全相同**：
+
+```
+[Assistant tool calls]: advisor()
+
+Please advise on the executor's situation above.
+```
+
+### 根因（两层，都已被实测确认）
+
+**① 载荷以“待补全的动作”结尾。** 文档以“执行器刚调用了 `advisor()`”结束，而文档格式的**下一自然行就是 `[Tool result (advisor)]:`**。模型从那里开始续写。伪造段的第一行（字符 4,285）正是它。
+
+**② 信噪比极低 —— 一份 667,925 字符投递的构成：**
+
+| 内容 | 占比 |
+| --- | --- |
+| 执行器的 thinking | 36.2% |
+| 工具清单（advisor 不调工具！）| 21.5% |
+| 工具结果（原始输出）| 21.1% |
+| 工具调用（仅签名）| 17.2% |
+| assistant 正文 | 3.5% |
+| **用户的原话** | **0.5%** |
+
+99.5% 是执行器的过程噪音 —— 而过程噪音正是伪造的燃料：advisor 被要求从一堆“执行器做过什么”里判断一个决策，它自然把“继续描述执行器做什么”当成了任务。
+
+**这是 fork 引入的回归。** 上游有 `stripInflightAdvisorCall()`（`context.ts`）专剥掉执行器的在途 `advisor()` 调用。改写时删掉了它，理由是“纯文本渲染不会被 provider 拒绝 orphan toolCall”—— **漏掉了那个守卫的第二个作用：不让载荷以待补全的动作结尾**。
+
+### 修复：镜像机制整体移除
+
+用户判断（“不应该把所有对话丢给 advisor，而是压缩信息后丢 prompt”）被实测数据支持 —— 见上面的构成表。改为执行器编写结构化 brief：
+
+```
+advisor({ question, context?, options?, evidence?, leaning?, unsure? })
+```
+
+- 载荷是**一份完整的文档**，以明确指令结尾（`Reply with your guidance only…`），永不以待补全的动作结尾
+- 单字段上限 6,000 字符，超长被截断**并标记**
+- 无 `question` 时在创建会话前拒绝，不花钱
+- `evidence` 让执行器引用可核验的一手来源（`file:line`、实测数字），advisor 据此可以反驳推理 —— 这是“压缩”不丢掉核查能力的关键
+
+**保留的**：持久会话（用户决定）、`AdvisorSessionDriver` 接缝、模型/effort 切换、空回复重试、信封契约。
+**移除的**：`mirror.ts`、`advisor.mirror.test.ts`、`MirrorState` / 水位线、`EXECUTOR_MIRROR_MARKER`、`MSG_ADVISOR_NUDGE`、工具清单注入（advisor 不调工具）、`delivery` 字段。
+
+### 与 I-4 的关系
+
+I-4 是“advisor 的立场被误当作用户的话”；I-9 是反向 —— advisor 伪造**执行器的行为**。两者同源：镜像格式让 advisor 不再把自己当读建议的顾问，而是当转录的一部分。
+
+### 未做的修改
+
+没有加“回复侧截断守卫”（在第一个伪造标记处截断 advisor 的回复）。它是个合理的纵深防御，但如果载荷形状正确就不需要；在拿到“新形状仍会诱发续写”的证据之前不加。若将来出现，这是第一个该加的地方。
+
 ---
 
 ## 上游未改动的相关缺陷（记录备查，非本 fork 引入）

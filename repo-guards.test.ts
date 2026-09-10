@@ -240,44 +240,48 @@ describe("repository guards", () => {
 
 
 	//
-	// Live measurement (two consultations, one session) showed the plugin handing
-	// over 1.86 MB then 19 KB of executor context — but the provider still received
-	// the advisor's entire history (`cacheRead: 456,448` on the second call). An
-	// earlier tool description said it "only sends what changed since your last
-	// consultation", which reads as a provider-level or billing-level claim and is
-	// false. This guard fails if that overclaim returns.
-	it("never claims the provider receives only the delta", () => {
+	// The mirror is gone, so the old delivery claim is moot — but the OPPOSITE
+	// overclaim now exists: the tool description must not claim the advisor sees
+	// the executor's conversation. It does not; it sees only the brief. Upstream's
+	// description said "your conversation history is automatically forwarded",
+	// which was true there and is false here.
+	it("does not claim the advisor receives the executor's conversation", () => {
 		const registerSrc = readFileSync(join(repoRoot, "advisor", "register.ts"), "utf8");
-		const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
 
-		// The tool description reaches the system prompt, so it is the highest-risk
-		// place for an overclaim.
 		const descStart = registerSrc.indexOf("const ADVISOR_DESCRIPTION");
 		const descEnd = registerSrc.indexOf("export const DEFAULT_PROMPT_SNIPPET");
 		expect(descStart, "ADVISOR_DESCRIPTION not found").toBeGreaterThan(-1);
 		expect(descEnd).toBeGreaterThan(descStart);
 		const description = registerSrc.slice(descStart, descEnd);
 
-		expect(description).not.toMatch(/only sends what changed/i);
-		// It must actively disclaim the token saving rather than merely omit it.
-		expect(description).toMatch(/not a token saving/i);
+		// The claim that would mislead the executor into under-specifying the brief.
+		expect(description, "must not claim history is auto-forwarded").not.toMatch(
+			/conversation history is automatically forwarded/i,
+		);
+		expect(description).not.toMatch(/Takes NO parameters/i);
 
-		// The README must carry the measured figures, not just a hedge.
-		expect(readme).toMatch(/cacheRead/);
-		expect(readme).toMatch(/456,448|456448/);
+		// It must state the real contract instead: the executor authors the brief.
+		expect(description).toMatch(/does not receive your history/i);
 	});
 
-	// GUARD 7 — the watermark is the only mirror state; a per-entry id list was
-	// measured growing every turn (9,381 B at 836 ids → 9,469 B at 844) while
-	// nothing ever read it.
-	it("mirror state does not persist a per-entry id list again", () => {
-		const pool = readFileSync(join(repoRoot, "advisor", "session-pool.ts"), "utf8");
-		const exec = readFileSync(join(repoRoot, "advisor", "execute.ts"), "utf8");
+	// GUARD 7 — the tool must require a brief, and the registration must pass one
+	// through. A zero-param schema would let the executor call advisor() expecting
+	// history forwarding, and a host that drops the argument must be refused rather
+	// than crash.
+	it("requires a structured brief and passes it through", () => {
+		const registerSrc = stripComments(readFileSync(join(repoRoot, "advisor", "register.ts"), "utf8"));
+		const execSrc = stripComments(readFileSync(join(repoRoot, "advisor", "execute.ts"), "utf8"));
 
-		const iface = pool.slice(pool.indexOf("export interface MirrorState"), pool.indexOf("export interface AdvisorSessionDriver"));
-		expect(iface, "MirrorState not found").not.toBe("");
-		expect(iface).not.toMatch(/deliveredIds\??:/);
-		expect(exec).not.toMatch(/saveMirrorState\(\{\s*watermarkId:[^}]*deliveredIds/);
+		// "question" is the one required field — it is what makes a consultation
+		// answerable.
+		expect(registerSrc).toMatch(/question:\s*Type\.String/);
+		for (const field of ["context", "options", "evidence", "leaning", "unsure"]) {
+			expect(registerSrc, `schema should accept an optional ${field}`).toContain(field);
+		}
+		// It must be forwarded to executeAdvisor, not dropped.
+		expect(registerSrc).toMatch(/executeAdvisor\(ctx,\s*pi,\s*params/);
+		// And execute must refuse an empty question before spending a paid call.
+		expect(execSrc).toContain("isUsableBrief");
 	});
 
 	// GUARD 8 — the advisor session must never be auto-compacted.
@@ -292,35 +296,40 @@ describe("repository guards", () => {
 		expect(code).toContain("setAutoCompactionEnabled(false)");
 	});
 
-	// GUARD 9 — a compaction must replace what it summarised, never accumulate.
+	// GUARD 9 — the payload must never be a continuable transcript.
 	//
-	// I-7 disabled the advisor session's auto-compaction, which removed the only
-	// automatic shrink. That exposed the mirror's own growth: planMirror rendered
-	// getBranch(), whose entries include everything a compaction already
-	// summarised, so a rebase re-sent a full transcript on top of the copy already
-	// in the session. Measured live it produced
-	// `prompt is too long: 1,387,946 tokens > 1,000,000 maximum` — the advisor was
-	// unusable, and the failed call grew the file from 2.2 MB to 4.6 MB.
+	// This is the I-9 regression guard. The mirrored payload rendered the executor
+	// transcript with `[User]:` / `[Assistant thinking]:` / `[Assistant tool
+	// calls]:` / `[Tool result (bash)]:` markers and ENDED on the executor's own
+	// in-flight `[Assistant tool calls]: advisor()` line. The advisor continued the
+	// document instead of answering it: in one reply 11,308 of 15,593 chars (72.5%)
+	// were invented executor activity — tool results, edits, and a commit hash that
+	// does not exist in the repository. That text then re-entered the executor's
+	// context looking exactly like the real transcript, and the executor nearly
+	// reported the fabricated work as done.
 	//
-	// GUARD 8 and this guard are a pair: disabling compaction is only safe while
-	// the mirror shrinks at a compaction. Reverting either one alone reintroduces
-	// unbounded growth.
-	it("resolves the transcript through buildContextEntries so a compaction shrinks the payload", () => {
-		const code = stripComments(readFileSync(join(repoRoot, "advisor", "mirror.ts"), "utf8"));
+	// The mirror module is deleted; this guard keeps its FORMAT from coming back in
+	// any future payload builder.
+	it("never builds a payload that looks like a continuable transcript", () => {
+		const briefSrc = readFileSync(join(repoRoot, "advisor", "brief.ts"), "utf8");
+		const code = stripComments(briefSrc);
 
-		// The resolved context is what makes a summary replace its sources.
-		expect(code, "mirror.ts must resolve the context via buildContextEntries").toContain(
-			"buildContextEntries()",
-		);
+		const builders = ["buildBriefText", "buildStartingContext", "buildRebaseContext", "buildTranscriptUpdate"];
+		for (const name of builders) {
+			const body = new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}`).exec(code)?.[0];
+			if (!body) continue;
+			for (const marker of ["[Assistant]:", "[Assistant thinking]:", "[Assistant tool calls]:", "[Tool result ("]) {
+				expect(body, `${name} must not emit the continuable marker ${marker}`).not.toContain(marker);
+			}
+		}
 
-		// It must be reached from the function that renders a FULL transcript, not
-		// merely declared on the interface — that was the defect's shape.
-		const fn = /function fullTranscriptEntries[\s\S]*?\n}/.exec(code)?.[0];
-		expect(fn, "fullTranscriptEntries not found in mirror.ts").toBeDefined();
-		expect(fn!, "fullTranscriptEntries must consult buildContextEntries").toContain("buildContextEntries");
+		// The payload must end on an instruction, not on a pending action. The old
+		// payload's final content line was the executor's in-flight advisor() call.
+		const builder = /function buildBriefText[\s\S]*?\n\}/.exec(code)?.[0];
+		expect(builder, "buildBriefText not found in advisor/brief.ts").toBeDefined();
+		expect(builder!).toContain("SECTION_INSTRUCTION");
 
-		// The watermark must NOT shrink with the summary: coveredIds comes from the
-		// raw branch, or the next call sees it missing and rebases forever.
-		expect(code).toMatch(/const coveredIds = branch\.map/);
+		// And the mirror module must stay deleted — reviving it revives the defect.
+		expect(() => readFileSync(join(repoRoot, "advisor", "mirror.ts"), "utf8")).toThrow();
 	});
 });

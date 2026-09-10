@@ -228,9 +228,8 @@ export function __resetFixtureIds(): void {
 }
 
 /**
- * Wrap a message as a session entry. Real entries always carry id/parentId, and
- * the mirror's watermark tracking is keyed on `id`, so the fixture must supply
- * one or incremental delivery cannot be exercised at all.
+ * Wrap a message as a session entry. Real entries always carry id/parentId, so the
+ * fixture must supply one for anything that walks the graph.
  */
 export function makeMessageEntry(message: Message, parentId: string | null = null): SessionEntry {
 	entryIdCounter += 1;

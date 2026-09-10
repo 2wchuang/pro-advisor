@@ -1,5 +1,5 @@
 /**
- * register — the advisor tool registration: zero-param schema, curated
+ * register — the advisor tool registration: structured-parameter schema, curated
  * description / promptSnippet / promptGuidelines, and an execute that delegates
  * to executeAdvisor. The guidance overrides are read from persisted config.
  */
@@ -8,28 +8,60 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateGuidanceFields } from "@juicesharp/rpiv-config";
 import { Type } from "typebox";
 import { loadAdvisorConfig } from "./config.js";
+import type { AdvisorBrief } from "./brief.js";
 import { executeAdvisor } from "./execute.js";
 import { ADVISOR_TOOL_NAME, TOOL_LABEL } from "./messages.js";
 import { AdvisorSessionPool } from "./session-pool.js";
 
-const AdvisorParams = Type.Object({});
+const AdvisorParams = Type.Object({
+	question: Type.String({
+		description:
+			"The decision you need judged, stated plainly. Required.",
+	}),
+	context: Type.Optional(
+		Type.String({
+			description:
+				"Background the advisor needs to judge it: what the task is, where things stand, what you have already tried.",
+		}),
+	),
+	options: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Alternatives under consideration, one per entry.",
+		}),
+	),
+	evidence: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Primary-source evidence you are relying on (file:line references, measured numbers, citations). The advisor can check your reasoning only against what you cite here.",
+		}),
+	),
+	leaning: Type.Optional(
+		Type.String({ description: "What you currently lean toward, and why." }),
+	),
+	unsure: Type.Optional(
+		Type.String({ description: "The specific thing you cannot resolve." }),
+	),
+});
 
 const ADVISOR_DESCRIPTION =
 	"Escalate to a stronger reviewer model for guidance. When you need " +
 	"stronger judgment — a complex decision, an ambiguous failure, a problem " +
-	"you're circling without progress — escalate to the advisor model for " +
-	"guidance, then resume. Takes NO parameters — when you call advisor(), " +
-	"your conversation history is automatically forwarded. The advisor keeps " +
-	"ONE persistent session per executor session, so a follow-up call continues " +
-	"the same advisor conversation and only has to hand over what changed in " +
-	"yours. This is not a token saving: the advisor's own history is re-sent to " +
-	"its provider each turn like any other chat session.";
+	"you're circling without progress — write a brief and escalate to the advisor " +
+	"model, then resume. YOU decide what goes in the brief: the advisor does not " +
+	"see your conversation, so state the decision, the options, the evidence you " +
+	"are relying on, and what you cannot resolve. Cite primary sources " +
+	"(file:line, measured numbers) so it can challenge your reasoning rather than " +
+	"guess at it. The advisor keeps ONE persistent session per executor session, " +
+	"so follow-ups continue the same conversation. It has no tools and cannot " +
+	"inspect anything itself, and it does not receive your history automatically.";
 
 export const DEFAULT_PROMPT_SNIPPET =
 	"Escalate to a stronger reviewer model when you are stuck, when an approach is not converging, or before an irreversible decision";
 
 export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"The user is the decision-maker, not the advisor. `advisor` is a consultation tool you may choose to use — never an authority you must report to, defer to, or whose approval gates your work. If the advisor and the user disagree, the user wins.",
+	"`advisor` receives ONLY the brief you write — not your conversation. State the decision, the options you see, the evidence you are relying on, and what you cannot resolve. An under-specified brief returns generic advice; the quality of the answer is bounded by what you put in.",
+	"Cite primary sources in `evidence` (file:line, measured numbers, command output). The advisor has no tools and cannot inspect anything, so unstated evidence cannot be checked — it can only be taken on trust.",
 	"Call `advisor` when you are genuinely stuck: errors recurring without a converging explanation, an approach that is not working, results that do not fit. Escalating a decision you can resolve yourself wastes the user's time and money.",
 	"Call `advisor` before an irreversible or expensive step you are uncertain about — a destructive migration, a public API contract, a change whose failure would be costly to undo. Orientation (finding files, fetching a source, seeing what's there) never needs an advisor call.",
 	"Do NOT call `advisor` merely to open a task, to confirm an approach you already have primary-source evidence for, or on a fixed schedule. There is no minimum number of calls, and a task may legitimately use none.",
@@ -74,8 +106,8 @@ export function registerAdvisorTool(
 		promptGuidelines: guidance.promptGuidelines ?? DEFAULT_PROMPT_GUIDELINES,
 		parameters: AdvisorParams,
 
-		async execute(_toolCallId, _params, signal, onUpdate, ctx) {
-			return executeAdvisor(ctx, pi, signal, onUpdate, { pool });
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			return executeAdvisor(ctx, pi, params as AdvisorBrief, signal, onUpdate, { pool });
 		},
 	});
 }

@@ -19,8 +19,10 @@
  *     both described completeSimple resolution, which no longer exists; the
  *     equivalent concern (auth resolution) is covered by the preflight tests and
  *     by session-pool.test.ts's modelRuntime passthrough.
- *   - "uses compacted session context instead of raw branch messages" — that is
- *     now mirror.test.ts's rebase-planning coverage.
+ *   - "uses compacted session context instead of raw branch messages" — that whole
+ *     concern is gone: the payload is built from the tool's structured parameters,
+ *     not from the session, so there is no branch or compaction to plan around.
+ *     See advisor.brief.test.ts for payload construction.
  */
 
 import {
@@ -41,8 +43,12 @@ vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
 });
 
 import { executeAdvisor } from "./advisor/execute.js";
-import type { AdvisorReply, AdvisorSessionDriver, MirrorState } from "./advisor/session-pool.js";
+import type { AdvisorSessionDriver, AdvisorReply } from "./advisor/session-pool.js";
 import { AdvisorSessionPool } from "./advisor/session-pool.js";
+import type { AdvisorBrief } from "./advisor/brief.js";
+
+/** A minimal valid brief. Every executeAdvisor call now requires one. */
+const brief: AdvisorBrief = { question: "Which constraint breaks the tie?" };
 import { setAdvisorEffort, setAdvisorModel } from "./advisor/index.js";
 
 const modelA = { provider: "a", id: "m", name: "Model A" } as never;
@@ -56,7 +62,6 @@ class MockDriver implements AdvisorSessionDriver {
 	readonly prompts: string[] = [];
 	readonly modelCalls: unknown[] = [];
 	readonly effortCalls: Array<string | undefined> = [];
-	mirrorState: MirrorState = {};
 	disposed = false;
 	private replies: AdvisorReply[];
 	private completedTurns: number;
@@ -95,14 +100,6 @@ class MockDriver implements AdvisorSessionDriver {
 		return [];
 	}
 
-	loadMirrorState(): MirrorState {
-		return this.mirrorState;
-	}
-
-	saveMirrorState(state: MirrorState): void {
-		this.mirrorState = state;
-	}
-
 	dispose(): void {
 		this.disposed = true;
 	}
@@ -130,15 +127,17 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.content[0]).toMatchObject({ type: "text", text: "advice" });
 		expect(r.details).toMatchObject({
 			advisorModel: "a:m",
 			advisorSessionId: "advisor-test-session",
-			delivery: "initial",
 			stopReason: "stop",
 		});
+		// The delivery concept is gone with the mirror: each call sends its own
+		// brief, so there is no initial/incremental/rebase distinction.
+		expect(r.details).not.toHaveProperty("delivery");
 		// A non-empty first attempt must NOT retry.
 		expect(driver.prompts).toHaveLength(1);
 	});
@@ -149,50 +148,88 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const first = await executeAdvisor(ctx, pi, undefined, undefined, { pool });
-		const second = await executeAdvisor(ctx, pi, undefined, undefined, { pool });
+		const first = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool });
+		const second = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool });
 
 		expect(first.details?.advisorSessionId).toBe(second.details?.advisorSessionId);
 		expect(first.content[0]).toMatchObject({ text: "first" });
 		expect(second.content[0]).toMatchObject({ text: "second" });
 	});
 
-	it("delivers only new activity on the second call", async () => {
+	it("sends the brief, and the payload is not a continuable transcript", async () => {
 		const driver = new MockDriver([{ text: "first" }, { text: "second" }]);
 		const pool = poolWith(driver);
 		const { pi } = createMockPi();
+		const ctx = createMockCtx({ branch: branch() });
 
-		// A SessionManager-like source whose branch grows between calls.
-		const entries = branch();
-		const source = {
-			getBranch: () => entries,
-			getEntry: (id: string) => entries.find((e) => e.id === id),
-			getSessionId: () => "test-session",
+		const payload: AdvisorBrief = {
+			question: "Should a compaction rebase rotate the advisor session?",
+			context: "The mirror was removed; briefs are now written by the executor.",
+			options: ["Rotate on compaction", "Keep appending"],
+			evidence: ["advisor/brief.ts:1 — payload construction"],
+			leaning: "Rotate, but not without evidence",
+			unsure: "What counts as enough evidence?",
 		};
-		const ctx = createMockCtx({ sessionManager: source });
 
-		await executeAdvisor(ctx, pi, undefined, undefined, { pool });
-		entries.push(...buildSessionEntries([makeUserMessage("follow up")]));
-		const second = await executeAdvisor(ctx, pi, undefined, undefined, { pool });
+		await executeAdvisor(ctx, pi, payload, undefined, undefined, { pool });
+		const sent = driver.prompts[0]!;
 
-		expect(second.details?.delivery).toBe("incremental");
-		expect(driver.prompts[1]).toContain("follow up");
-		// The already-delivered first message must not be re-sent.
-		expect(driver.prompts[1]).not.toContain("[User]: q");
+		// The brief reaches the advisor, including the required question.
+		expect(sent).toContain("Should a compaction rebase rotate the advisor session?");
+		expect(sent).toContain("Rotate on compaction");
+		expect(sent).toContain("advisor/brief.ts:1");
+
+		// I-9 regression guard: the payload must never look like the mirrored
+		// transcript that the advisor continued instead of answering. These are the
+		// exact markers it used to fabricate tool results and commits.
+		for (const marker of ["[Assistant]:", "[Assistant thinking]:", "[Assistant tool calls]:", "[Tool result ("]) {
+			expect(sent, `payload must not contain the continuable marker ${marker}`).not.toContain(marker);
+		}
+		// And it must not END on a pending action (the old payload ended on the
+		// executor's own in-flight `advisor()` call, inviting completion).
+		expect(sent.trimEnd().endsWith("advisor()")).toBe(false);
+		expect(sent).toMatch(/Reply with your guidance only/);
 	});
 
-	it("aborted reply returns the cancel envelope and does NOT commit the watermark", async () => {
+	it("each call sends its own brief; no transcript state is delivered or persisted", async () => {
+		const driver = new MockDriver([{ text: "first" }, { text: "second" }]);
+		const pool = poolWith(driver);
+		const { pi } = createMockPi();
+		const ctx = createMockCtx({ branch: branch() });
+
+		await executeAdvisor(ctx, pi, { question: "FIRST" }, undefined, undefined, { pool });
+		await executeAdvisor(ctx, pi, { question: "SECOND" }, undefined, undefined, { pool });
+
+		// Self-contained payloads: the second does not restate the first, and the
+		// session is still reused (persistent session, per-call payload).
+		expect(driver.prompts[0]).toContain("FIRST");
+		expect(driver.prompts[1]).toContain("SECOND");
+		expect(driver.prompts[1]).not.toContain("FIRST");
+	});
+
+	it("refuses an empty question before creating a session or calling the model", async () => {
+		const driver = new MockDriver([{ text: "should not be reached" }]);
+		const ctx = createMockCtx({ branch: branch() });
+		const { pi } = createMockPi();
+
+		const r = await executeAdvisor(ctx, pi, { question: "   " }, undefined, undefined, {
+			pool: poolWith(driver),
+		});
+
+		expect(r.content[0]).toMatchObject({ type: "text" });
+		expect(String((r.content[0] as { text: string }).text)).toMatch(/without a question/i);
+		expect(driver.prompts).toHaveLength(0);
+	});
+
+	it("aborted reply returns the cancel envelope", async () => {
 		const driver = new MockDriver([{ text: "", stopReason: "aborted" }]);
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.details).toMatchObject({ stopReason: "aborted", errorMessage: "aborted" });
 		expect(r.content[0]).toMatchObject({ text: "Advisor call was cancelled before it completed." });
-		// Critical: an aborted consultation must leave the watermark untouched so
-		// the next call re-delivers these entries instead of skipping them.
-		expect(driver.mirrorState.watermarkId).toBeUndefined();
 	});
 
 	it("error stopReason returns a wrapped errorMessage and does NOT retry", async () => {
@@ -200,7 +237,7 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.content[0]).toMatchObject({ text: expect.stringContaining("502") });
 		expect(r.details).toMatchObject({ stopReason: "error", errorMessage: "502" });
@@ -212,7 +249,7 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(driver.prompts).toHaveLength(2);
 		expect(r.details).toMatchObject({ errorMessage: "empty response" });
@@ -225,7 +262,7 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.content[0]).toMatchObject({ text: "recovered advice" });
 		expect(driver.prompts).toHaveLength(2);
@@ -239,7 +276,7 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.content[0]).toMatchObject({ text: expect.stringContaining("boom") });
 		expect(r.details).toMatchObject({ errorMessage: "boom" });
@@ -251,7 +288,7 @@ describe("executeAdvisor — envelope contract", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(driver.modelCalls).toEqual([modelA]);
 		// The session identity must survive a model switch.
@@ -265,7 +302,7 @@ describe("executeAdvisor — failure envelopes", () => {
 		const ctx = createMockCtx({ branch: branch() });
 		const { pi } = createMockPi();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: new AdvisorSessionPool() });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: new AdvisorSessionPool() });
 
 		expect(r.details).toMatchObject({ errorMessage: "no advisor model selected" });
 	});
@@ -279,7 +316,7 @@ describe("executeAdvisor — failure envelopes", () => {
 		});
 		const pool = new AdvisorSessionPool();
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool });
 
 		expect(r.content[0]).toMatchObject({ text: expect.stringContaining("bad config") });
 		expect(r.details).toMatchObject({ errorMessage: "bad config", advisorModel: "a:m" });
@@ -299,7 +336,7 @@ describe("executeAdvisor — failure envelopes", () => {
 		(ctx.modelRegistry as unknown as { hasConfiguredAuth: () => boolean }).hasConfiguredAuth = () => false;
 		const pool = poolWith(new MockDriver());
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool });
 
 		expect(r.content[0]).toMatchObject({ text: expect.stringContaining("no API key") });
 		expect(r.details).toMatchObject({ errorMessage: "no API key for a" });
@@ -312,7 +349,7 @@ describe("executeAdvisor — failure envelopes", () => {
 		(ctx.modelRegistry.getApiKeyAndHeaders as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 		(ctx.modelRegistry as unknown as { hasConfiguredAuth: () => boolean }).hasConfiguredAuth = () => true;
 
-		const r = await executeAdvisor(ctx, pi, undefined, undefined, { pool: poolWith(driver) });
+		const r = await executeAdvisor(ctx, pi, brief, undefined, undefined, { pool: poolWith(driver) });
 
 		expect(r.content[0]).toMatchObject({ text: "oauth advice" });
 	});

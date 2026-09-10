@@ -37,14 +37,7 @@ export {
 } from "./handlers.js";
 export { getInventoryMessage, stableStringify } from "./inventory.js";
 export { ADVISOR_TOOL_NAME } from "./messages.js";
-export {
-	buildRebaseContext,
-	buildStartingContext,
-	buildTranscriptUpdate,
-	planMirror,
-	renderEntries,
-	renderEntry,
-} from "./mirror.js";
+export { buildBriefText, isUsableBrief, type AdvisorBrief } from "./brief.js";
 export { setDisabledForModels } from "./policy.js";
 export {
 	DEFAULT_PROMPT_GUIDELINES,
@@ -60,8 +53,6 @@ export {
 	advisorSessionId,
 	advisorSessionPath,
 	createAdvisorDriver,
-	MIRROR_STATE_CUSTOM_TYPE,
-	type MirrorState,
 } from "./session-pool.js";
 export {
 	type AdvisorStatus,

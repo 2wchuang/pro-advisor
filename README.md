@@ -19,7 +19,7 @@ pi install npm:@2wchuang/pro-advisor
 Or from git — no npm account or registry involved:
 
 ```bash
-pi install git:github.com/2wchuang/pro-advisor@v0.2.1
+pi install git:github.com/2wchuang/pro-advisor@v0.3.0
 ```
 
 Restart your Pi session. Run `/advisor` to pick the reviewer model — nothing
@@ -32,49 +32,58 @@ happens until you do.
 
 ## What this does and does not claim
 
-The upstream advisor is a **stateless side-call**: every `advisor()` call
-re-serialises the executor's whole conversation branch and sends it as a fresh
-single request. The reviewer sees continuous context because the executor's
-history is replayed each time, but the advisor itself remembers nothing between
-calls, and its own replies are not part of any continuing conversation.
+The upstream advisor is a **stateless side-call**: every `advisor()` call takes no
+parameters, re-serialises the executor's whole conversation branch, and sends it
+as a fresh single request. The reviewer sees continuous context because the
+executor's history is replayed each time, but the advisor itself remembers nothing
+between calls.
 
-This fork makes the advisor a **real, persistent Pi `AgentSession`**, one per
-executor session:
+This fork makes two changes:
 
-- the first consultation delivers the executor's resolved context once, as the
-  advisor's *starting context*
-- later consultations append **only the executor entries produced since the
-  previous one**
-- the advisor's own prior turns stay in its session, so a follow-up is a
-  genuine continuation rather than a cold restart
+1. the advisor is a **real, persistent Pi `AgentSession`**, one per executor
+   session, so a follow-up is a genuine continuation rather than a cold restart;
+2. the advisor receives **a brief the executor writes**, not the conversation.
 
-**What is claimed:** session continuity, a stable append-only prefix, and no
-re-transmission of already-delivered executor context **into the advisor's
-session**.
+### Why the brief replaced the transcript
 
-**Measured, not assumed.** Two live consultations in one executor session, with a
-~1.8 MB executor branch:
+The first iteration of this fork *did* forward the transcript, incrementally. It
+was measured, and removed — see [docs/ISSUES.md](docs/ISSUES.md) I-9. A real
+667,925-character delivery broke down as:
 
-| | executor context handed over (JSONL) | provider `usage.input` | provider `cacheRead` |
-| --- | --- | --- | --- |
-| 1st call | 1,859,126 B | 456,675 | 0 |
-| 2nd call | **19,239 B** | **7,440** | **456,448** |
+| Content | Share |
+| --- | --- |
+| executor thinking | 36.2% |
+| tool inventory (the advisor calls no tools) | 21.5% |
+| raw tool output | 21.1% |
+| tool-call signatures | 17.2% |
+| executor prose | 3.5% |
+| **the user's own words** | **0.5%** |
 
-So the incremental delivery is real — the second call handed over 19 KB instead of
-1.86 MB. But it is a statement about *what the plugin writes into the advisor
-session*, not about what the provider receives.
+And it produced a fabrication failure: the payload rendered the transcript with
+`[Assistant tool calls]:` / `[Tool result (x)]:` markers and **ended on the
+executor's own in-flight `advisor()` call**, so the document's next natural line
+was a tool result. The advisor continued the document instead of answering it. In
+one reply **11,308 of 15,593 characters (72.5%) were invented executor activity** —
+including a commit hash that does not exist in the repository. That text re-entered
+the executor's context looking exactly like the real transcript.
+
+**What is claimed:** session continuity, and that the advisor sees only what the
+executor chose to send it.
+
+**What the executor must now do:** author the brief. The advisor has no tools, no
+conversation access, and no ability to inspect anything. It can only judge what it
+is told — so cite primary sources (`file:line`, measured numbers) in `evidence`,
+or the advisor can only take the reasoning on trust.
 
 **What is NOT claimed:**
 
-- **No provider-side cache guarantee.** `cacheRead: 456,448` on the second call
-  shows the advisor's history is re-serialised and re-sent to its provider in
-  full, exactly like any other chat session; the executor delta is a small
-  addition to an unchanged prefix. Whether that prefix is billed or served from
-  cache is the provider's decision, and this package cannot promise it.
-- **Not a guaranteed token saving.** On a long-lived advisor session the
-  accumulated advisor history can cost more per turn than a stateless call would.
-- **Not faster by construction.** Continuity is the goal; speed is a side
-effect, not a contract.
+- **Not a token saving relative to the upstream stateless design.** Continuity is
+  the goal. The advisor also keeps its own history, which is re-sent to its
+  provider each turn like any other chat session — that prefix is the provider's
+  to cache or bill, and this package does not promise either.
+- **Not faster by construction.** Speed is a side effect, not a contract.
+- **No independent verification.** The advisor cannot check a claim you did not
+  state. It challenges your reasoning, not your facts.
 
 ## Session identity
 
@@ -82,10 +91,10 @@ The advisor session is keyed by the executor session id, so:
 
 | Executor action | Advisor behaviour |
 | --- | --- |
-| Repeated `advisor()` calls | same advisor session, incremental delivery |
+| Repeated `advisor()` calls | same advisor session; each call carries its own brief |
 | `/new` | new advisor session |
 | `/fork` | new advisor session (no cross-branch contamination) |
-| `/resume` | reopens the **same** advisor session — same id, same history, same mirror watermark |
+| `/resume` | reopens the **same** advisor session — same id, same history |
 | `/advisor` → different model | `setModel()` on the same session; identity survives the switch |
 | `/advisor` → No advisor | sessions disposed; a later re-enable starts fresh |
 
@@ -93,16 +102,15 @@ The advisor session is keyed by the executor session id, so:
 
 The advisor's session accumulates its own prior conclusions. If an early
 consultation reasoned from a premise that later turned out to be wrong, that
-reasoning stays in its history and can keep colouring later advice. The
-stateless upstream design re-read the current branch every call and so carried no
-such residue.
+reasoning stays in its history and can keep colouring later advice. The stateless
+upstream design read the current branch every call and so carried no such residue.
 
-`planMirror()` rebases when the watermark is gone or a compaction intervened, and
-`buildRebaseContext()` tells the advisor that earlier transcript content is
-superseded. **That is prompt wording, not demonstrated forgetting** — no test yet
-shows that the advisor actually withdraws a stale conclusion after a rebase. Until
-one does, treat this as an open risk rather than a solved problem, and prefer
-`/new` when a line of reasoning has gone definitively wrong.
+Nothing in this package demonstrates that the advisor *withdraws* a stale
+conclusion. Treat stale bias as an **open risk**, and prefer `/new` when a line of
+reasoning has gone definitively wrong. (The pre-I-9 design attempted a "rebase"
+that re-stated the transcript and told the advisor its earlier reading was
+superseded; that mechanism is gone with the mirror, so this risk is now
+unmitigated by wording as well.)
 
 ### Fixed: compaction inverted the advisor's identity
 
@@ -122,12 +130,11 @@ Upstream could not hit this: a stateless side-call keeps no session, so there wa
 nothing to compact. It is a hazard the persistent design introduced.
 
 Fixed by disabling auto-compaction on the advisor session
-(`session-pool.ts`). The trade-off is that a very long advisor session keeps
-growing, which this fork already documents — preferable to silent role inversion.
+(`session-pool.ts`) — belt and braces now that the payload is a brief: a summary
+of a brief cannot describe the executor's task as the advisor's own, but the
+inversion is too costly to leave to that argument alone.
 
-Sessions are stored under `~/.pi/agent/pro-advisor/`. Mirror bookkeeping (the
-"already delivered" watermark) is written into the advisor session file itself
-as a custom entry, so it survives `/resume` with no side-channel file.
+Sessions are stored under `~/.pi/agent/pro-advisor/`.
 
 ## Safety
 
@@ -135,28 +142,26 @@ The advisor session is constructed with extensions, skills, prompt templates,
 themes, context files, and **all tools disabled**. It cannot call a tool, cannot
 write to your transcript, and cannot recursively load this extension.
 
-Failure handling is conservative: a failed, aborted, or empty consultation does
-**not** advance the watermark, so the next call re-delivers the same entries.
-Duplicating context is deliberate — skipping it could silently hide executor
-work from the reviewer.
+Failure handling is conservative: a failed, aborted, or empty consultation never
+claims success. An empty response is retried **exactly once**, with a short
+corrective prompt in the same advisor session. Aborted and provider-error replies
+are never retried.
 
-An empty response is retried **exactly once**, with a short corrective prompt in
-the same advisor session. Aborted and provider-error replies are never retried.
+A call with no `question` is refused **before** a session is created or a paid
+call is made.
 
-## Context rebase
+## Payload shape is load-bearing
 
-An incremental delivery assumes the executor's entry graph still extends what the
-advisor already read. Two events break that, and both trigger an explicit rebase
-that re-states the transcript in full and marks it as superseding earlier
-content:
+The consultation payload is built by `advisor/brief.ts` and is deliberately **not**
+a continuable transcript. That is a correctness property, not a style preference —
+see [docs/ISSUES.md](docs/ISSUES.md) I-9. Two rules are enforced by tests:
 
-- **compaction** — the resolved context collapsed older entries into a summary
-- **divergence** — the executor branched or forked away, so the watermark is no
-  longer on the current leaf path
+- the payload never emits `[Assistant]:` / `[Assistant thinking]:` /
+  `[Assistant tool calls]:` / `[Tool result (x)]:` markers;
+- it always **ends on an instruction**, never on a pending action.
 
-A rebase resets only the *mirrored transcript*. The advisor keeps its own prior
-reasoning, so it is told its earlier reading is superseded rather than being
-cold-started.
+Fields are capped at 6,000 characters each and truncation is marked inline, so a
+clipped thought is not silently read as complete.
 
 ## Configuration
 
@@ -192,12 +197,13 @@ Most files are retained verbatim. The session layer is new:
 | File | Status |
 | --- | --- |
 | `advisor/session-pool.ts` | **new** — persistent advisor session + pool |
-| `advisor/mirror.ts` | **new** — incremental delivery + rebase planning |
+| `advisor/brief.ts` | **new** — structured-payload construction (replaced the transcript mirror) |
 | `advisor/status.ts` | **new** — `/advisor-status`: sessions, turns, on-disk history size |
-| `advisor/execute.ts` | **rewritten** — drives the session instead of a stateless completion |
-| `advisor/register.ts` | **changed** — `DEFAULT_PROMPT_GUIDELINES` rewritten; see *Advisor voice* below |
+| `advisor/execute.ts` | **rewritten** — drives the session with a brief instead of a stateless completion |
+| `advisor/register.ts` | **changed** — structured schema; `DEFAULT_PROMPT_GUIDELINES` rewritten; see *Advisor voice* below |
 | `index.ts`, `advisor/handlers.ts`, `advisor/restore.ts`, `advisor/command.ts` | **minimally wired** — pool injection, dispose on session switch/shutdown |
 | `advisor/context.ts`, `advisor/pi-compat.ts` | **removed** — both existed only to shape a per-call payload and resolve a global completion for it |
+| `advisor/mirror.ts` | **removed** — forwarded the executor transcript; measured 99.5% process noise and induced payload fabrication (I-9) |
 | everything else incl. `advisor/config.ts`, `messages.ts`, `policy.ts`, `state.ts`, `inventory.ts`, `advisor-ui.ts`, `fuzzy.ts` | **unchanged** |
 
 ### Advisor voice
@@ -223,14 +229,17 @@ for the guards that keep these regressions from returning.
 
 ### Test coverage
 
-232 tests. Upstream's 205 are retained where they still describe the code, and
+236 tests. Upstream's are retained where they still describe the code, and
 transport-specific tests were **replaced** rather than dropped:
 
 - `advisor/pi-compat.test.ts` and `advisor.strip.test.ts` tested the removed
   completion resolution and tail-massaging; they are replaced by
-  `advisor.mirror.test.ts` (delivery policy, rebase, rendering) and
+  `advisor.brief.test.ts` (payload construction + I-9 shape guards) and
   `advisor.session-pool.test.ts` (session identity, isolation, resume,
-  concurrency, zero tools, watermark round-trip).
+  concurrency, zero tools).
+- `advisor.mirror.test.ts` covered incremental delivery and rebase planning for
+  the mirror; it was deleted with the mirror. The equivalent concern — what the
+  advisor actually receives — now lives in `advisor.brief.test.ts`.
 - `advisor.execute.test.ts` was rewritten against an injectable
   `AdvisorSessionDriver` seam. The envelope contract is preserved — success,
   auth failure, abort, provider error, thrown error, bounded empty-response

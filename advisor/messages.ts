@@ -30,12 +30,22 @@ export const CHECKMARK = " ✓";
 // Messages (static)
 export const MSG_ADVISOR_DISABLED = "Advisor disabled";
 export const MSG_REQUIRES_INTERACTIVE = "/advisor requires interactive mode";
-export const MSG_ADVISOR_NUDGE = "Please advise on the executor's situation above.";
+
 /**
- * Delimits the mirrored executor transcript inside the advisor session, so the
- * advisor can tell executor activity apart from its own prior replies.
+ * Per-field cap for a structured brief. Generous enough for a real question with
+ * cited evidence, small enough that a runaway field cannot reproduce the mirror's
+ * failure mode of flooding the advisor with process noise.
  */
-export const EXECUTOR_MIRROR_MARKER = "EXECUTOR TRANSCRIPT";
+export const MAX_FIELD_CHARS = 6_000;
+
+/**
+ * Truncate a field, marking the cut so the advisor knows text is missing rather
+ * than silently reading a clipped thought as complete.
+ */
+export function clip(text: string, limit: number): string {
+	if (text.length <= limit) return text;
+	return `${text.slice(0, limit)}\n…[truncated ${text.length - limit} chars]`;
+}
 /**
  * Sent as the single bounded retry when the advisor returns no text. A short
  * corrective turn in the SAME advisor session is what makes the retry useful —
@@ -51,6 +61,9 @@ export const ERR_NO_MODEL = "No advisor model is configured. The user can enable
 export const ERR_CALL_ABORTED = "Advisor call was cancelled before it completed.";
 export const ERR_EMPTY_RESPONSE = "Advisor returned no text content.";
 export const ERR_NO_MODEL_SELECTED = "no advisor model selected";
+export const ERR_NO_QUESTION =
+	"Advisor was called without a question. Pass at least { question } describing the decision you need judged.";
+export const ERR_NO_QUESTION_DETAIL = "empty question";
 export const ERR_EMPTY_RESPONSE_DETAIL = "empty response";
 export const ERR_ABORTED_DETAIL = "aborted";
 export const ERR_UNKNOWN = "unknown error";

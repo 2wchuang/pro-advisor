@@ -28,7 +28,7 @@ describe("advisor execute — buildErrorResult envelope", () => {
 		const tool = captured.tools.get("advisor");
 		expect(tool).toBeDefined();
 		const ctx = createMockCtx();
-		const result = await tool?.execute?.("tc1", {}, undefined as never, undefined as never, ctx);
+		const result = await tool?.execute?.("tc1", { question: "Is this configured correctly?" }, undefined as never, undefined as never, ctx);
 		expect(result?.content[0]).toMatchObject({ type: "text" });
 		expect(result?.details).toMatchObject({ errorMessage: "no advisor model selected" });
 		expect(result?.details).not.toHaveProperty("advisorModel");
@@ -41,7 +41,7 @@ describe("advisor execute — buildErrorResult envelope", () => {
 		registerAdvisorTool(pi);
 		const tool = captured.tools.get("advisor");
 		const ctx = createMockCtx();
-		const result = await tool?.execute?.("tc1", {}, undefined as never, undefined as never, ctx);
+		const result = await tool?.execute?.("tc1", { question: "Is this configured correctly?" }, undefined as never, undefined as never, ctx);
 		expect(result?.details).toMatchObject({ effort: "medium" });
 	});
 
@@ -55,7 +55,7 @@ describe("advisor execute — buildErrorResult envelope", () => {
 			...ctx.modelRegistry,
 			getApiKeyAndHeaders: (async () => ({ ok: false, error: "bad" })) as never,
 		} as never;
-		const result = await tool?.execute?.("tc1", {}, undefined as never, undefined as never, ctx);
+		const result = await tool?.execute?.("tc1", { question: "Is this configured correctly?" }, undefined as never, undefined as never, ctx);
 		expect(result?.details).toMatchObject({ advisorModel: "a:m", errorMessage: "bad" });
 	});
 });

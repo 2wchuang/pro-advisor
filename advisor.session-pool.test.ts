@@ -10,7 +10,6 @@
  *     session file rather than minting a new one
  *   - the advisor session exposes ZERO tools
  *   - concurrent creations for one executor session share a single session
- *   - mirror bookkeeping is persisted into and recovered from the session file
  *
  * The real `createAdvisorDriver` is exercised against a temp agent dir: session
  * construction is local (no network, no credentials) once the model is injected,
@@ -166,7 +165,7 @@ describe("createAdvisorDriver — session construction", () => {
 		try {
 			// The driver exposes no compaction surface, so assert on the session the
 			// driver actually owns: the flag must be off, or Pi may summarise the
-			// advisor's mirrored transcript into a false identity.
+			// advisor's own history into a false identity (docs/ISSUES.md I-7).
 			const inner = (driver as unknown as { session: { autoCompactionEnabled: boolean } }).session;
 			expect(inner.autoCompactionEnabled).toBe(false);
 		} finally {
@@ -197,105 +196,6 @@ describe("createAdvisorDriver — session construction", () => {
 		} finally {
 			a.dispose();
 			b.dispose();
-		}
-	});
-});
-
-describe("mirror bookkeeping — persists into and survives the session file", () => {
-	it("a fresh session reports no watermark", async () => {
-		const agentDir = tempAgentDir();
-		const driver = await createAdvisorDriver({
-			executorSessionId: "exec-fresh",
-			executorCwd: agentDir,
-			model,
-			effort: undefined,
-			agentDir,
-		});
-		try {
-			expect(driver.loadMirrorState()).toEqual({});
-		} finally {
-			driver.dispose();
-		}
-	});
-
-	it("round-trips the watermark through a reopened session", async () => {
-		const agentDir = tempAgentDir();
-		const sessionFile = advisorSessionPath(agentDir, "exec-mirror");
-		const options = {
-			executorSessionId: "exec-mirror",
-			executorCwd: agentDir,
-			model,
-			effort: undefined,
-			agentDir,
-		};
-
-		// Seed the persisted turn that a completed consultation leaves behind. The
-		// watermark is written by appendCustomEntry, which only reaches disk once the
-		// session file exists — and in the real flow saveMirrorState always runs
-		// AFTER the advisor's assistant message has been appended.
-		seedPersistedTurn(sessionFile, agentDir);
-
-		const first = await createAdvisorDriver(options);
-		first.saveMirrorState({ watermarkId: "entry-7" });
-		first.dispose();
-
-		const reopened = await createAdvisorDriver(options);
-		try {
-			expect(reopened.loadMirrorState()).toEqual({ watermarkId: "entry-7" });
-		} finally {
-			reopened.dispose();
-		}
-	});
-
-	it("ignores a legacy deliveredIds array instead of migrating state it never read", async () => {
-		// An earlier revision persisted every delivered entry id. Nothing consumed
-		// it and it was rewritten in full each turn, so it was removed; sessions
-		// written before that still contain it and must not break the watermark.
-		const agentDir = tempAgentDir();
-		const sessionFile = advisorSessionPath(agentDir, "exec-legacy");
-		const options = {
-			executorSessionId: "exec-legacy",
-			executorCwd: agentDir,
-			model,
-			effort: undefined,
-			agentDir,
-		};
-		seedPersistedTurn(sessionFile, agentDir);
-
-		const first = await createAdvisorDriver(options);
-		first.saveMirrorState({
-			watermarkId: "entry-7",
-			// Simulate a pre-removal session file.
-			...({ deliveredIds: ["entry-6", "entry-7"] } as unknown as Record<string, never>),
-		});
-		first.dispose();
-
-		const reopened = await createAdvisorDriver(options);
-		try {
-			expect(reopened.loadMirrorState()).toEqual({ watermarkId: "entry-7" });
-		} finally {
-			reopened.dispose();
-		}
-	});
-
-	it("a lost watermark on an unflushed session is harmless", async () => {
-		// A session whose file never materialised also has zero advisor turns, so
-		// planMirror necessarily plans a FULL delivery. Losing the watermark cannot
-		// cause the executor's context to be silently skipped — only re-sent.
-		const agentDir = tempAgentDir();
-		const driver = await createAdvisorDriver({
-			executorSessionId: "exec-unflushed",
-			executorCwd: agentDir,
-			model,
-			effort: undefined,
-			agentDir,
-		});
-		try {
-			driver.saveMirrorState({ watermarkId: "entry-9" });
-			expect(driver.turns).toBe(0);
-			expect(driver.loadMirrorState().watermarkId).toBe("entry-9");
-		} finally {
-			driver.dispose();
 		}
 	});
 });

@@ -14,6 +14,61 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-18
+
+### Changed (breaking)
+
+- **The advisor now receives a brief you write, not your conversation.**
+  `advisor()` takes structured parameters:
+
+  ```
+  advisor({ question, context?, options?, evidence?, leaning?, unsure? })
+  ```
+
+  `question` is required; a call without one is refused before a session is
+  created. This is a breaking change to the tool's interface and to what the
+  advisor can see — it no longer receives history automatically, so the executor
+  must state the decision, the options, and the evidence it is relying on.
+
+### Removed
+
+- `advisor/mirror.ts` and its tests. The mirror forwarded the executor's resolved
+  transcript, rendered with `[Assistant]:` / `[Assistant tool calls]:` /
+  `[Tool result (x)]:` markers.
+
+  Measured on a real 667,925-character delivery: 36.2% executor thinking, 21.5% a
+  tool inventory the advisor cannot use (it calls no tools), 21.1% raw tool
+  output, 17.2% tool-call signatures, 3.5% executor prose — and **0.5% the user's
+  own words**.
+
+  It also caused fabrication. The payload ended on the executor's own in-flight
+  `[Assistant tool calls]: advisor()`, so the document's next natural line was a
+  tool result, and the advisor continued the document instead of answering it. In
+  one reply **11,308 of 15,593 chars (72.5%) were invented executor activity** —
+  fabricated tool results, edits, and a commit hash that does not exist in this
+  repository. That text returned as a tool result looking exactly like the real
+  transcript, and the executor nearly reported the fabricated work as complete.
+
+  Also removed with it: `MirrorState`, the watermark, `EXECUTOR_MIRROR_MARKER`,
+  `MSG_ADVISOR_NUDGE`, tool-inventory injection, and the `delivery` field on the
+  result envelope.
+
+### Added
+
+- `advisor/brief.ts` — payload construction, with the payload shape treated as a
+  correctness property: it never emits continuable-transcript markers and always
+  ends on an instruction. Fields are capped at 6,000 chars with truncation marked
+  inline.
+- `advisor.brief.test.ts` (10 tests) and `repo-guards.test.ts` GUARD 9, both
+  mutation-verified: reintroducing the marker format or reviving `mirror.ts` fails
+  them.
+
+### Kept
+
+- The persistent advisor session, `AdvisorSessionDriver` seam, model/effort
+  switching, the bounded single empty-response retry, and the result-envelope
+  contract.
+
 ## [0.2.5] - 2026-02-18
 
 ### Fixed

@@ -4,14 +4,16 @@
  * The advisor is a PERSISTENT Pi session (see session-pool.ts), not a stateless
  * side-call. This module owns the sequence:
  *
- *   resolve model → get-or-create the executor's advisor session → plan the
- *   incremental transcript delivery → ask the advisor (serialized per session)
- *   → commit the watermark → build the tool-result envelope
+ *   resolve model → get-or-create the executor's advisor session → render the
+ *   structured brief → ask the advisor (serialized per session) → build the
+ *   tool-result envelope
  *
- * The mirror watermark is committed ONLY after a turn produces usable text, so a
- * failed or aborted consultation leaves it untouched and the next call
- * re-delivers the same entries. Duplicating context is the safe failure: skipping
- * it would silently hide executor work from the reviewer.
+ * The payload is built from the tool's STRUCTURED parameters, not from the
+ * executor's transcript. The transcript mirror was removed after it was measured
+ * to be 99.5% process noise (36.2% executor thinking, 21.5% an unused tool
+ * inventory) and to induce the advisor to continue the document rather than
+ * answer it — fabricating tool results, edits and commit hashes that the executor
+ * then read back as fact. See docs/ISSUES.md I-9 and advisor/brief.ts.
  *
  * Every result branch funnels through buildAdvisorResult so the envelope is
  * constructed in exactly one place.
@@ -25,7 +27,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { GradedEffort } from "./messages.js";
-import { getInventoryMessage } from "./inventory.js";
+import { buildBriefText, isUsableBrief, type AdvisorBrief } from "./brief.js";
 import {
 	ERR_ABORTED_DETAIL,
 	ERR_CALL_ABORTED,
@@ -33,6 +35,8 @@ import {
 	ERR_EMPTY_RESPONSE_DETAIL,
 	ERR_NO_MODEL,
 	ERR_NO_MODEL_SELECTED,
+	ERR_NO_QUESTION,
+	ERR_NO_QUESTION_DETAIL,
 	ERR_SESSION_CREATE,
 	MSG_EMPTY_RETRY,
 	errCallFailed,
@@ -42,14 +46,6 @@ import {
 	errNoApiKeyDetail,
 	msgConsulting,
 } from "./messages.js";
-import {
-	buildRebaseContext,
-	buildStartingContext,
-	buildTranscriptUpdate,
-	planMirror,
-	renderEntries,
-	type MirrorSource,
-} from "./mirror.js";
 import type { AdvisorReply, AdvisorSessionDriver, AdvisorSessionPool } from "./session-pool.js";
 import { getAdvisorEffort, getAdvisorModel } from "./state.js";
 
@@ -63,8 +59,6 @@ interface AdvisorDetails {
 	advisorSessionId?: string;
 	/** Advisor turns completed, including this one. */
 	turn?: number;
-	/** Whether this call delivered full context or only new activity. */
-	delivery?: "initial" | "incremental" | "rebase";
 }
 
 // Single result-envelope builder — every branch and pre-call error path funnels
@@ -77,7 +71,6 @@ function buildAdvisorResult(opts: {
 	advisorLabel?: string;
 	advisorSessionId?: string;
 	turn?: number;
-	delivery?: AdvisorDetails["delivery"];
 	usage?: Usage;
 	stopReason?: StopReason;
 	errorMessage?: string;
@@ -86,7 +79,6 @@ function buildAdvisorResult(opts: {
 	if (opts.advisorLabel !== undefined) details.advisorModel = opts.advisorLabel;
 	if (opts.advisorSessionId !== undefined) details.advisorSessionId = opts.advisorSessionId;
 	if (opts.turn !== undefined) details.turn = opts.turn;
-	if (opts.delivery !== undefined) details.delivery = opts.delivery;
 	if (opts.usage !== undefined) details.usage = opts.usage;
 	if (opts.stopReason !== undefined) details.stopReason = opts.stopReason;
 	if (opts.errorMessage !== undefined) details.errorMessage = opts.errorMessage;
@@ -102,34 +94,6 @@ function buildErrorResult(
 	return buildAdvisorResult({ text: userText, effort, advisorLabel, errorMessage });
 }
 
-/**
- * Build the prompt text for a consultation from its mirror plan.
- *
- * A rebase for an EXISTING advisor session keeps the advisor's own prior turn
- * history — only the mirrored executor transcript is reset — so the rebase text
- * marks itself as superseding earlier transcript content rather than pretending
- * the advisor has never seen this task.
- */
-function buildPrompt(
-	driver: AdvisorSessionDriver,
-	plan: ReturnType<typeof planMirror>,
-	sessionManager: MirrorSource,
-	inventoryText: string | undefined,
-): { text: string; delivery: AdvisorDetails["delivery"] } {
-	const transcript = renderEntries(sessionManager, plan.renderIds);
-	if (!plan.full) {
-		return { text: buildTranscriptUpdate(transcript), delivery: "incremental" };
-	}
-	// "First ever delivery" is decided by the ADVISOR SESSION's own history, not
-	// by the in-memory watermark: after /resume the watermark is recovered from
-	// the session, and a session that already has turns must not be re-greeted
-	// with a starting context that claims to be complete-as-of-now.
-	if (driver.turns === 0) {
-		return { text: buildStartingContext(inventoryText, transcript), delivery: "initial" };
-	}
-	return { text: buildRebaseContext(transcript, plan.compacted ? "compaction" : "divergence"), delivery: "rebase" };
-}
-
 export interface ExecuteDeps {
 	pool: AdvisorSessionPool;
 	agentDir?: string;
@@ -138,6 +102,7 @@ export interface ExecuteDeps {
 export async function executeAdvisor(
 	ctx: ExtensionContext,
 	pi: ExtensionAPI,
+	brief: AdvisorBrief,
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback<AdvisorDetails> | undefined,
 	deps: ExecuteDeps,
@@ -149,6 +114,11 @@ export async function executeAdvisor(
 	const advisor: Model<Api> | undefined = getAdvisorModel();
 	if (!advisor) {
 		return buildErrorResult(undefined, effort, ERR_NO_MODEL, ERR_NO_MODEL_SELECTED);
+	}
+	// A consultation with no stated question cannot be answered; refuse before
+	// creating a session or spending a paid call.
+	if (!isUsableBrief(brief)) {
+		return buildErrorResult(undefined, effort, ERR_NO_QUESTION, ERR_NO_QUESTION_DETAIL);
 	}
 	const advisorLabel = `${advisor.provider}:${advisor.id}`;
 
@@ -177,13 +147,14 @@ export async function executeAdvisor(
 
 	// Re-read the selection inside the driver's own queue: another consultation may
 	// have changed the reviewer while this call waited.
-	return askWithDriver(ctx, pi, driver, signal);
+	return askWithDriver(ctx, pi, driver, brief, signal);
 }
 
 async function askWithDriver(
 	ctx: ExtensionContext,
 	pi: ExtensionAPI,
 	driver: AdvisorSessionDriver,
+	brief: AdvisorBrief,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<AdvisorDetails>> {
 	const effort = getAdvisorEffort();
@@ -225,11 +196,7 @@ async function askWithDriver(
 		}
 	}
 
-	const mirrorState = driver.loadMirrorState();
-	const plan = planMirror(ctx.sessionManager, mirrorState.watermarkId);
-	const inventoryMessage = getInventoryMessage(pi.getAllTools());
-	const inventoryText = inventoryMessage ? inventoryTextOf(inventoryMessage) : undefined;
-	const { text, delivery } = buildPrompt(driver, plan, ctx.sessionManager, inventoryText);
+	const text = buildBriefText(brief);
 
 	let reply: AdvisorReply;
 	try {
@@ -258,7 +225,6 @@ async function askWithDriver(
 		advisorLabel,
 		advisorSessionId: driver.sessionId,
 		turn: driver.turns + 1,
-		delivery,
 	};
 
 	if (reply.stopReason === "aborted") {
@@ -290,15 +256,9 @@ async function askWithDriver(
 		return buildErrorResult(advisorLabel, effort, ERR_EMPTY_RESPONSE, ERR_EMPTY_RESPONSE_DETAIL);
 	}
 
-	// Success: commit the watermark and persist it into the advisor session so an
-	// executor /resume continues incrementally. Only the watermark is stored;
-	// see MirrorState for why the per-entry id list was dropped.
-	try {
-		driver.saveMirrorState({ watermarkId: plan.coveredIds[plan.coveredIds.length - 1] });
-	} catch {
-		// Bookkeeping only — a persistence failure must not fail the consultation.
-	}
-
+	// Success. There is no watermark or delivery state to commit: the advisor
+	// session keeps its own history, and each consultation is self-contained in
+	// the brief, so nothing needs recovering after a /resume.
 	return buildAdvisorResult({
 		text: reply.text,
 		...envelopeBase,
@@ -320,29 +280,6 @@ function isTerminal(stopReason: string | undefined): boolean {
  */
 function hasUsableText(reply: AdvisorReply): boolean {
 	return reply.text.trim().length > 0;
-}
-
-/** Extract the plain text of the inventory Message (a single text block). */
-function inventoryTextOf(message: { content?: unknown }): string | undefined {
-	const content = message.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return undefined;
-	const parts: string[] = [];
-	for (const block of content) {
-		if (typeof block === "string") {
-			parts.push(block);
-			continue;
-		}
-		if (
-			typeof block === "object" &&
-			block !== null &&
-			(block as { type?: string }).type === "text" &&
-			typeof (block as { text?: unknown }).text === "string"
-		) {
-			parts.push((block as { text: string }).text);
-		}
-	}
-	return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 /**
