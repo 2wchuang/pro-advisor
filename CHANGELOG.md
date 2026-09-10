@@ -14,6 +14,38 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-02-18
+
+### Fixed
+
+- **Auto-compaction inverted the advisor's identity.** On the first session long
+  enough to cross Pi's compaction threshold (`tokensBefore: 510,091`), the advisor
+  stopped advising and asked the executor for instructions — "I need your guidance
+  on where we stand" — then listed the executor's publishing milestones as its own
+  achievements.
+
+  An advisor session is a real Pi `AgentSession`, so Pi's auto-compaction applied
+  to it. The summarizer is built for the executor: its template asks for
+  `## Goal`, `## Constraints & Preferences`, `## Progress`, `## Next Steps`. The
+  advisor's transcript is a *mirror of the executor's work*, so summarizing it
+  described the executor's task as the advisor's own, and the advisor adopted that
+  identity. Upstream could not hit this — a stateless side-call has no session to
+  compact. It is a hazard the persistent design introduced.
+
+  Fixed by disabling auto-compaction on the advisor session. The trade-off is that
+  a long-lived advisor session keeps growing, which this fork already documents;
+  that is preferable to silent role inversion.
+
+### Verified
+
+- `deliveredIds` removal confirmed in production: the new mirror-state entry is
+  **27 bytes** (watermark only) against **10,077 / 10,173 bytes** for the entries
+  written by 0.2.1, on the same live session.
+- Backward compatibility confirmed: 0.2.2 read a 0.2.1 session file containing the
+  legacy `deliveredIds` array, ignored it, and continued incrementally.
+- The watermark invariant held through two provider failures — no custom entry was
+  appended, so nothing was silently skipped.
+
 ## [0.2.2] - 2026-02-18
 
 Found by consulting the fork's own advisor twice in one live session and then

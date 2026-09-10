@@ -1,6 +1,6 @@
 {
   "name": "@2wchuang/pro-advisor",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Pi extension. A second opinion from a stronger reviewer model, kept in one persistent session per executor session.",
   "keywords": [
     "pi-package",

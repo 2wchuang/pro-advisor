@@ -104,6 +104,27 @@ shows that the advisor actually withdraws a stale conclusion after a rebase. Unt
 one does, treat this as an open risk rather than a solved problem, and prefer
 `/new` when a line of reasoning has gone definitively wrong.
 
+### Fixed: compaction inverted the advisor's identity
+
+Observed live, on the first session long enough to cross Pi's auto-compaction
+threshold (`tokensBefore: 510,091`): the advisor stopped advising and asked the
+executor for instructions — *"I need your guidance on where we stand"* — then
+listed the executor's publishing milestones as its own achievements.
+
+Cause: an advisor session is a real Pi `AgentSession`, so Pi's auto-compaction
+applied to it too. Its summarizer is written for the **executor** — the template
+asks for `## Goal`, `## Constraints & Preferences`, `## Progress`, `## Next Steps`.
+The advisor's transcript is a *mirror of the executor's work*, so summarising it
+produced a document describing the executor's task as the advisor's own, and the
+advisor adopted that identity.
+
+Upstream could not hit this: a stateless side-call keeps no session, so there was
+nothing to compact. It is a hazard the persistent design introduced.
+
+Fixed by disabling auto-compaction on the advisor session
+(`session-pool.ts`). The trade-off is that a very long advisor session keeps
+growing, which this fork already documents — preferable to silent role inversion.
+
 Sessions are stored under `~/.pi/agent/pro-advisor/`. Mirror bookkeeping (the
 "already delivered" watermark) is written into the advisor session file itself
 as a custom entry, so it survives `/resume` with no side-channel file.

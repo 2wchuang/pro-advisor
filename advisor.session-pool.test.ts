@@ -145,6 +145,35 @@ describe("createAdvisorDriver — session construction", () => {
 		}
 	});
 
+	it("auto-compaction is disabled on the advisor session", async () => {
+		// Regression: Pi's compaction summarizer is written for the executor — its
+		// template asks for "## Goal", "## Constraints & Preferences", "## Progress",
+		// "## Next Steps". Applied to an advisor session, whose transcript is a
+		// MIRROR of the executor's work, it summarised the executor's task as the
+		// advisor's own. Observed live: after compaction the advisor answered
+		// "I need your guidance on where we stand" and listed the executor's
+		// publishing milestones as its own achievements — the exact role inversion
+		// its system prompt forbids. Upstream could not hit this: it kept no session
+		// to compact.
+		const agentDir = tempAgentDir();
+		const driver = await createAdvisorDriver({
+			executorSessionId: "exec-compaction",
+			executorCwd: agentDir,
+			model,
+			effort: undefined,
+			agentDir,
+		});
+		try {
+			// The driver exposes no compaction surface, so assert on the session the
+			// driver actually owns: the flag must be off, or Pi may summarise the
+			// advisor's mirrored transcript into a false identity.
+			const inner = (driver as unknown as { session: { autoCompactionEnabled: boolean } }).session;
+			expect(inner.autoCompactionEnabled).toBe(false);
+		} finally {
+			driver.dispose();
+		}
+	});
+
 	it("distinct executor sessions get distinct advisor session files", async () => {
 		const agentDir = tempAgentDir();
 		const a = await createAdvisorDriver({

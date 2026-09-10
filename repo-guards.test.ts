@@ -247,4 +247,16 @@ describe("repository guards", () => {
 		expect(iface).not.toMatch(/deliveredIds\??:/);
 		expect(exec).not.toMatch(/saveMirrorState\(\{\s*watermarkId:[^}]*deliveredIds/);
 	});
+
+	// GUARD 8 — the advisor session must never be auto-compacted.
+	//
+	// Pi's compaction summarizer asks for "## Goal" / "## Progress" / "## Next
+	// Steps" because it is built for the executor. An advisor's transcript mirrors
+	// the executor's work, so compacting it produced a summary claiming the
+	// executor's task as the advisor's own — observed live as the advisor asking
+	// the executor for guidance. Upstream had no session to compact.
+	it("keeps auto-compaction disabled on the advisor session", () => {
+		const code = stripComments(readFileSync(join(repoRoot, "advisor", "session-pool.ts"), "utf8"));
+		expect(code).toContain("setAutoCompactionEnabled(false)");
+	});
 });

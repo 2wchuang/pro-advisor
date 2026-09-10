@@ -143,6 +143,29 @@ class PiAdvisorSessionDriver implements AdvisorSessionDriver {
 		this.session = session;
 		this.sessionManager = sessionManager;
 		this.completedTurns = countAssistantTurns(sessionManager);
+
+		// Auto-compaction must never run on an advisor session.
+		//
+		// Pi's compaction summarizer is written for the executor: its template asks
+		// for "## Goal", "## Constraints & Preferences", "## Progress", "## Next
+		// Steps". Applied to an advisor session — whose transcript is a *mirror of
+		// the executor's* work — it produces a summary that describes the EXECUTOR's
+		// task as the advisor's own. Observed live: after compaction the advisor
+		// replied "I need your guidance on where we stand" and enumerated the
+		// executor's publishing milestones as its own achievements, inverting the
+		// roles the system prompt establishes. The upstream stateless design could
+		// not hit this because it had no session to compact.
+		//
+		// Refusing to compact keeps the advisor's identity and its own prior replies
+		// intact. The cost is that a very long-lived advisor session keeps growing;
+		// that is the trade this fork already documents, and it is preferable to
+		// silent role inversion.
+		try {
+			this.session.setAutoCompactionEnabled(false);
+		} catch {
+			// Older Pi versions may not expose the toggle. Losing it degrades to the
+			// previous behaviour rather than failing the consultation.
+		}
 	}
 
 	get sessionId(): string {
