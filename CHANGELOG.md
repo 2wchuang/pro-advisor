@@ -1,11 +1,66 @@
 # Changelog
 
-All notable changes to `@juicesharp/rpiv-advisor` are documented here.
+Entries up to `2.9.0` are the history of the upstream package
+`@juicesharp/rpiv-advisor`, retained for provenance. Entries under the fork's own
+version headings document `@2wchuang/pro-advisor`.
+
+Note: the `2.1.0` entry below records upstream *adding* the requirement to restate
+the advisor's guidance in every visible reply. That requirement was observed to
+cause the executor to report to the advisor rather than to the user and was
+reversed in this fork — see `0.2.0` and `docs/ISSUES.md` I-2/I-4.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-02-18
+
+### Changed
+
+- **`DEFAULT_PROMPT_GUIDELINES` rewritten.** The advisor is now a tool the
+executor may use, not an authority it must report to. Removed: "Call `advisor`
+BEFORE substantive work", the "at least once before committing to an approach and
+once before declaring done" floor, "Give the advisor's advice serious weight" as
+an unconditional instruction, and "put the advisor's key guidance into your next
+visible reply to the user". Added: the user is named the decision-maker, there is
+explicitly no minimum number of calls, escalation is for being stuck or facing a
+costly irreversible step, and the advisor's views must never be attributed to the
+user. Reporting a consultation is limited to cases where it changed the plan.
+- `promptSnippet` no longer advertises calling "before substantive work".
+- `UPSTREAM_PROMPT_GUIDELINES` added, retaining the removed strings for reference
+and regression testing rather than erasing them.
+
+### Added
+
+- `/advisor-status` (`advisor/status.ts`): advisor session count, per-session turn
+counts, advisor tool count, and on-disk history size. The byte figure is labelled
+a proxy for history size — not tokens, not cost.
+- `docs/ISSUES.md`: six findings with their evidence and reproducers.
+- `repo-guards.test.ts`: fails if the tsconfig include blind spot returns, if a
+`docs/ISSUES.md` entry claims a fix while citing no source file, or if any removed
+guideline is reintroduced into the defaults.
+- `advisor.mirror.test.ts`, `advisor.session-pool.test.ts`, `advisor.status.test.ts`.
+
+### Fixed
+
+- `tsconfig.json` included `src/**/*.ts` and `test/**/*.ts` while the real sources
+live in `advisor/` and the repository root, so `npm run typecheck` checked two
+unrelated files and exited 0. With the correct include it surfaced 14 genuine type
+errors across the test files, now fixed.
+- `registerAdvisorTool(pi)` with one argument silently produced a broken pool;
+the parameter is now optional with a self-contained default.
+
+### Removed
+
+- `advisor/context.ts`, `advisor/pi-compat.ts` — both existed only to shape a
+per-call payload and resolve a global completion for it. Their tests are replaced
+by coverage of the session layer, not dropped.
+
+## [0.1.0]
+
+Initial fork. Keeps one persistent advisor session per executor session instead
+of re-sending the branch to a stateless completion on every call.
 
 ## [2.9.0] - 2026-09-01
 
